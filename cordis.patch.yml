@@ -1,0 +1,4 @@
+# dsh-model-toolkit bundle patch: inserts the plugin into a profile's layer stack.
+- insert:
+    - id: model-toolkit
+      name: 'dsh-model-toolkit'

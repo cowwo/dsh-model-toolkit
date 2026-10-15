@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # 需要写权限才能创建 GitHub Release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # 刻意**不**装依赖：本包没有构建步骤（client/client.js 是手写并提交的预构建 bundle），
+      # 而 `npm publish` 只打包文件、不需要 node_modules。少一步就少一处 CI 失败面，
+      # 也避免 `npm ci` 因仓库无 lockfile 而必然失败。
+
+      # 失败可见性：先把这次要发的「tag / 包名 / 版本号」打出来。
+      # 再守住 tag 与版本号必须对应（v0.1.0 ↔ 0.1.0），不一致就当场失败，不发半截。
+      - name: Show release identity
+        run: |
+          echo "tag:     ${GITHUB_REF_NAME}"
+          echo "package: $(node -p "require('./package.json').name")"
+          echo "version: $(node -p "require('./package.json').version")"
+
+      - name: Check tag matches package.json version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package.json version ${version} (expected v${version})" >&2
+            exit 1
+          fi
+
+      # 1. 发布裸名版 dsh-model-toolkit（让别人用短名装），带重试兜底瞬时 404 / 网络抖动
+      - name: Publish dsh-model-toolkit
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i: npm publish dsh-model-toolkit";
+            if npm publish --access public; then echo 'published dsh-model-toolkit'; exit 0; fi
+            echo "Attempt $i failed, retrying in 5s...";
+            sleep 5;
+          done;
+          echo 'All publish attempts failed for dsh-model-toolkit'; exit 1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 2. 同一版本再发 scoped 版：临时把包名改成 @cowwo/... 再发一次（带重试）。
+      #    scoped 名只在发布时加，不写回仓库 —— 仓库里的 name 永远保留裸名。
+      - name: Publish @cowwo/dsh-model-toolkit
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          npm pkg set name=@cowwo/dsh-model-toolkit
+          echo "publishing @cowwo/dsh-model-toolkit@${version}"
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i: npm publish @cowwo/dsh-model-toolkit";
+            if npm publish --access public; then echo 'published @cowwo/dsh-model-toolkit'; exit 0; fi
+            echo "Attempt $i failed, retrying in 5s...";
+            sleep 5;
+          done;
+          echo 'All publish attempts failed for @cowwo/dsh-model-toolkit'; exit 1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 3. 把两个包名的发布结论再打一遍，失败时一眼能看出是哪一半没上去
+      - name: Publish summary
+        run: |
+          echo "version : $(node -p "require('./package.json').version")"
+          echo "bare    : dsh-model-toolkit"
+          echo "scoped  : @cowwo/dsh-model-toolkit"
+          echo "same version, two independent npm packages."
+
+      # 4. 自动创建 GitHub Release 版本页（写进安装命令）
+      - name: Create GitHub Release
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## 安装
+
+          ```sh
+          dsh plugin --profile web add dsh-model-toolkit
+          ```
+
+          也可用 scoped 名：`@cowwo/dsh-model-toolkit`。装好后重启 `dsh web`。
+
+          ## 这个版本包含
+
+          - **模型能力管理**（原 `dsh-model-fit` 0.2.3）：为手动添加的模型设置图片输入与推理强度、
+            线路级系统消息角色，并支持从目录模型一键「继承自…」。
+          - **提供商徽章与余量**（原 `dsh-provider-info` 0.17.0）：输入框模型座左侧显示提供商徽章，
+            悬停查看提供商 / 当前模型 / 余量与全部提供商余量表格。
+          - 新增两个功能开关 `capabilityEditor` 与 `badgeAndQuota`（都在**设置 → 提供商信息**里勾选，
+            默认开，刷新页面后生效）。
+          - 修掉三处旧疾：写设置失败不再假报「已保存」；客户端余量缓存补上 TTL；
+            文档更正密钥口径（宿主进程会读取密钥值，仅用于向厂商发请求）。
+          - 已知未处理项：「清空能力」仍是全局删除且不可逆，计划第二阶段加二次确认。
+
+          详见仓库 `CHANGELOG.md`。
+          EOF
+          gh release create ${GITHUB_REF_NAME} --title "${GITHUB_REF_NAME}" --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
