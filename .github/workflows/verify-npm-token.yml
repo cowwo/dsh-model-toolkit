@@ -1,0 +1,68 @@
+name: Verify NPM_TOKEN
+
+# 手动触发：验证仓库 secret `NPM_TOKEN` 是否有效、是否具备发布权限。
+# 刻意**不发布任何东西** —— 见最后一步的说明。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: 1) 令牌是否有效（whoami）
+        run: |
+          echo "registry: $(npm config get registry)"
+          who=$(npm whoami)
+          echo "whoami: $who"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: 2) 令牌能访问哪些包（仅供参考，失败不阻断）
+        run: npm access list packages || true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 关键一步：探测"发布权限"，但**不会真的发布**。
+      # 手法：拿一个**已经发布过**的版本号去发，npm 一定拒绝重复版本，
+      # 而"拒绝的方式"正好能区分三种情况：
+      #   EPUBLISHCONFLICT / "cannot publish over"  → 令牌有效且有发布权限 ✅
+      #   E401 / ENEEDAUTH                          → 令牌无效或已过期 ❌
+      #   E403 / forbidden / permission             → 令牌有效但没有发布权限 ❌
+      #   EOTP                                      → 令牌有效但要求一次性密码 ⚠️
+      - name: 3) 发布权限探测（重发已存在的版本，绝不会真的发布）
+        run: |
+          set +e
+          version="$(node -p "require('./package.json').version")"
+          name="$(node -p "require('./package.json').name")"
+          echo "当前包: ${name}@${version}（该版本已发布，重复发布会失败）"
+          out="$(npm publish --access public 2>&1)"
+          code=$?
+          echo "----- npm 输出 -----"
+          echo "$out"
+          echo "----- 退出码: $code -----"
+          echo
+          if echo "$out" | grep -qE "EPUBLISHCONFLICT|cannot publish over|previously published"; then
+            echo "✅ 结论：令牌有效，且具备发布权限（重复版本被拒，符合预期，未发布任何东西）"
+            exit 0
+          fi
+          if echo "$out" | grep -qE "E401|ENEEDAUTH|Unauthorized"; then
+            echo "❌ 结论：令牌无效或已过期（E401）"; exit 1
+          fi
+          if echo "$out" | grep -qE "EOTP|one-time password"; then
+            echo "⚠️ 结论：令牌有效，但发布要求一次性密码（自动化场景不可用）"; exit 1
+          fi
+          if echo "$out" | grep -qE "E403|forbidden|permission"; then
+            echo "❌ 结论：令牌有效，但没有发布权限（E403）"; exit 1
+          fi
+          echo "⚠️ 结论：未预期的结果（退出码 $code），请人工判断上面的 npm 输出"; exit 1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
