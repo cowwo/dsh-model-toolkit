@@ -87,19 +87,14 @@ jobs:
 
           也可用 scoped 名：`@cowwo/dsh-model-toolkit`。装好后重启 `dsh web`。
 
-          ## 这个版本包含
+          ## 这个版本的变更
 
-          - **模型能力管理**（原 `dsh-model-fit` 0.2.3）：为手动添加的模型设置图片输入与推理强度、
-            线路级系统消息角色，并支持从目录模型一键「继承自…」。
-          - **提供商徽章与余量**（原 `dsh-provider-info` 0.17.0）：输入框模型座左侧显示提供商徽章，
-            悬停查看提供商 / 当前模型 / 余量与全部提供商余量表格。
-          - 新增两个功能开关 `capabilityEditor` 与 `badgeAndQuota`（都在**设置 → 提供商信息**里勾选，
-            默认开，刷新页面后生效）。
-          - 修掉三处旧疾：写设置失败不再假报「已保存」；客户端余量缓存补上 TTL；
-            文档更正密钥口径（宿主进程会读取密钥值，仅用于向厂商发请求）。
-          - 已知未处理项：「清空能力」仍是全局删除且不可逆，计划第二阶段加二次确认。
+          见仓库根目录的 `CHANGELOG.md` 中与本版本对应的条目（版本号 = 本 tag 去掉开头的 `v`）。
 
-          详见仓库 `CHANGELOG.md`。
+          - npm（裸名）：https://www.npmjs.com/package/dsh-model-toolkit
+          - npm（scoped）：https://www.npmjs.com/package/@cowwo/dsh-model-toolkit
+
+          > 两个包是各自独立的 npm 包，靠同一次流水线、同一版本号绑在一起；请以本页 tag 为准。
           EOF
           gh release create ${GITHUB_REF_NAME} --title "${GITHUB_REF_NAME}" --notes-file release-notes.md
         env:
