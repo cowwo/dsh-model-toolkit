@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>模型工具箱 · Model Toolkit</title>
+<link rel="stylesheet" href="./style.css">
+<script src="./app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容 / Skip to content</a>
+<!-- 独立设置页（B 端后台形态）：单页滚动 + 左侧锚点导航 + 三张表格。
+     三个区块从上到下一张页面上全在：模型能力（主表，一张平表 + 线路列）/ 线路余量 / 插件偏好。
+     没有卡片、没有瀑布流、没有「切换页面」、没有「点进详情」两层。
+     外壳 CSS Grid：>=1024px 时 aside 占左侧通高一列（锚点导航），其余内容在右列；
+     <1024px 时折成单列，aside 落到顶栏下方，横过来当吸顶锚点条。
+     表格窄屏时只在 .table-wrap 内部横向滚动，文档本身不横向溢出。 -->
+<div class="app" id="app">
+	<aside class="sidenav" id="sidenav"></aside>
+	<header class="topbar" id="topbar"></header>
+	<div class="banners" id="banners"></div>
+	<main class="main" id="main">
+		<p class="placeholder"><span class="placeholder-text">正在加载… / Loading…</span></p>
+		<noscript><span class="placeholder-text">此页面需要 JavaScript。/ This page requires JavaScript.</span></noscript>
+	</main>
+</div>
+</body>
+</html>

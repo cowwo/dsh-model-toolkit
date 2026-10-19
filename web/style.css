@@ -1,0 +1,1163 @@
+/* dsh-model-toolkit 独立设置页 · 样式（单页 + 锚点导航 + 两表一列表，B 端后台形态）
+ * 约定：无框架、无外部资源、无内联样式（宿主 CSP：style-src 'self'）。
+ * 视觉令牌冻结见 _spec/webpage-v1.md §5.2：色值、字体、字号(12/13/15/20)、
+ * 间距(8/12/16/24)、圆角 0、无阴影、无渐变。此文件不得新增色相。
+ * 布局：左侧锚点导航（点一下滚动定位，不切换页面）+ 右侧三个区块从上到下；
+ * 模型能力 / 线路余量是真二维数据 → 用表格；插件偏好是设置项 → 用表单式列表。
+ */
+
+/* ---------- 1. 令牌 ---------- */
+:root {
+	--paper: #F1F2EC;
+	--ink: #16191C;
+	/* 次级文字专用（副标题、模型 id、说明小字、表头、未激活项）。
+	 * 之前误用 --rule 当文字色，浅色下只有约 1.5:1 —— 这里单列出来。 */
+	--ink-muted: #5D6359;
+	--indigo: #2B4A8C;
+	--moss: #55704F;
+	--alert: #B8382C;
+	/* --rule 只用于线 / 边框 / 填充，不再用于任何文字 */
+	--rule: #C9CCC2;
+	/* 选中态 / 脏格 / 行 hover 的淡染：--indigo 的低透明度（同色相，不引入新颜色） */
+	--wash: rgba(43, 74, 140, 0.08);
+	/* 斑马纹：--ink 的低透明度。§5.2 要求「表格线只画在纵向分组处，不要每行都画」，
+	 * 所以密表用极浅的行底色隔行，而不是逐行画线（同样是 --ink 的透明度变体，不新增色相）。 */
+	--zebra: rgba(22, 25, 28, 0.035);
+	--font-ui: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+	--font-mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+	color-scheme: light;
+}
+
+/* 显式深色 */
+:root[data-theme="dark"] {
+	--paper: #131518;
+	--ink: #E8EAE4;
+	--ink-muted: #A2ABA3;
+	--indigo: #7C9BE0;
+	--moss: #8FAE87;
+	--alert: #E06A5C;
+	--rule: #2C3036;
+	--wash: rgba(124, 155, 224, 0.12);
+	--zebra: rgba(232, 234, 228, 0.05);
+	color-scheme: dark;
+}
+
+/* 跟随系统（data-theme="system" 是默认值，写在 html 标签上） */
+@media (prefers-color-scheme: dark) {
+	:root[data-theme="system"] {
+		--paper: #131518;
+		--ink: #E8EAE4;
+		--ink-muted: #A2ABA3;
+		--indigo: #7C9BE0;
+		--moss: #8FAE87;
+		--alert: #E06A5C;
+		--rule: #2C3036;
+		--wash: rgba(124, 155, 224, 0.12);
+		--zebra: rgba(232, 234, 228, 0.05);
+		color-scheme: dark;
+	}
+}
+
+/* ---------- 2. 基础 ---------- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html,
+body { margin: 0; padding: 0; }
+
+body {
+	background: var(--paper);
+	color: var(--ink);
+	font-family: var(--font-ui);
+	font-size: 13px;
+	line-height: 1.5;
+	-webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3, h4, p, ul, ol { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--indigo); }
+
+/* 数字与模型 ID 用等宽；.chip-btn 是思考等级等机器取值 */
+.mono,
+.mono-cell,
+.chip-btn,
+.num-input,
+.status-num { font-family: var(--font-mono); }
+
+/* 数字右对齐（表格里的数值列）。必须比 `.tbl td { text-align: left }` 更具体，
+ * 否则基础重置会把它盖掉（.tbl .num = 两个类，胜过 .tbl td = 一个类 + 一个元素）。 */
+.tbl .num,
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+:focus-visible {
+	outline: 2px solid var(--indigo);
+	outline-offset: 1px;
+}
+
+.skip {
+	position: absolute;
+	left: -9999px;
+	top: 8px;
+	padding: 8px 12px;
+	background: var(--paper);
+	border: 1px solid var(--indigo);
+	z-index: 30;
+}
+
+.skip:focus { left: 8px; }
+
+/* ---------- 3. 外壳：左导航 + 右内容（CSS Grid） ---------- */
+.app {
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr);
+	grid-template-rows: auto auto 1fr;
+	grid-template-areas:
+		"nav top"
+		"nav banners"
+		"nav main";
+	min-height: 100vh;
+	width: 100%;
+}
+
+.sidenav {
+	grid-area: nav;
+	background: var(--paper);
+	border-right: 1px solid var(--rule);
+}
+
+.sidenav-inner {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 16px 12px;
+}
+
+.brand {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	overflow-wrap: anywhere;
+}
+
+.nav { display: flex; flex-direction: column; }
+
+.nav-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.nav-li { display: block; }
+
+/* 锚点导航项：图标 + 中文标签，点按区高度 >=40px；
+ * 当前区块 = 3px 靛蓝竖条 + 背景淡染 + 文字 --indigo（不是「选中页」，是「滚到这里了」）。 */
+.nav-item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 40px;
+	padding: 8px;
+	border-left: 3px solid transparent;
+	border-radius: 0;
+	color: var(--ink-muted);
+	font-size: 13px;
+	text-align: left;
+	text-decoration: none;
+}
+
+.nav-item:hover { color: var(--ink); }
+
+.nav-item[aria-current="true"] {
+	background: var(--wash);
+	border-left-color: var(--indigo);
+	color: var(--indigo);
+	font-weight: 600;
+}
+
+.nav-label { overflow-wrap: anywhere; }
+
+.nav-icon { flex: 0 0 auto; display: block; }
+
+.nav-tip { font-size: 12px; color: var(--ink-muted); }
+
+.wrap {
+	width: 100%;
+	max-width: 1680px;
+	margin: 0 auto;
+}
+
+/* ---------- 4. 顶栏（搜索 / 线路筛选 / 只看已配置 / 语言 / 主题 / 保存）+ 批量工具栏 ---------- */
+.topbar {
+	grid-area: top;
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	background: var(--paper);
+	border-bottom: 1px solid var(--rule);
+}
+
+.topbar-inner {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 16px;
+}
+
+/* 区块内工具条（方案 A）：搜索 / 线路筛选 / 批量操作只服务所在区块 */
+.sec-tools {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 12px;
+}
+
+.sec-tools-filters {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sec-tools-batch {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.sec-tools-batch[hidden] { display: none; }
+
+.sec-tools-hint {
+	font-size: 12px;
+	color: var(--ink-muted);
+	margin-left: auto;
+}
+
+.sec-tools-hint[hidden] { display: none; }
+
+.toolbar-label {
+	font-size: 12px;
+	color: var(--ink-muted);
+}
+
+.toolbar-count {
+	font-size: 12px;
+	color: var(--ink-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* <1024px 的吸底操作条：窄屏顶栏不吸顶，保证「保存」随手可点 */
+.mobile-actions {
+	display: none;
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 30;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 8px 12px;
+	background: var(--paper);
+	border-top: 1px solid var(--rule);
+}
+
+/* 示例数据徽标：弱化处理（仅 mock 时出现） */
+.mock-badge {
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--ink-muted);
+	border: 1px solid var(--rule);
+	padding: 1px 8px;
+	white-space: nowrap;
+}
+
+.tools {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.search {
+	flex: 1 1 180px;
+	min-width: 0;
+	max-width: 260px;
+	min-height: 32px;
+	padding: 4px 8px;
+	font-size: 13px;
+	background: transparent;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	color: var(--ink);
+	appearance: none;
+}
+
+.search::placeholder { color: var(--ink-muted); }
+
+.seg {
+	display: flex;
+	border: 1px solid var(--rule);
+}
+
+.seg-btn {
+	appearance: none;
+	background: transparent;
+	border: 0;
+	border-left: 1px solid var(--rule);
+	color: var(--ink);
+	font-size: 12px;
+	padding: 4px 8px;
+	min-height: 32px;
+	min-width: 32px;
+	white-space: nowrap;
+}
+
+.seg-btn:first-child { border-left: 0; }
+
+.seg-btn[aria-pressed="true"] {
+	color: var(--indigo);
+	font-weight: 600;
+}
+
+.btn {
+	appearance: none;
+	background: transparent;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	color: var(--ink);
+	font-size: 13px;
+	padding: 5px 12px;
+	min-height: 32px;
+	white-space: nowrap;
+}
+
+.btn-mini {
+	font-size: 12px;
+	padding: 2px 8px;
+	min-height: 24px;
+}
+
+/* 禁用态显式给 --ink-muted（不要用浏览器默认的淡灰，对比度不够） */
+.btn[disabled],
+.search[disabled],
+.select[disabled],
+.seg-btn[disabled] {
+	color: var(--ink-muted);
+	border-color: var(--rule);
+	cursor: not-allowed;
+}
+
+.save-btn { border-color: var(--indigo); color: var(--indigo); font-weight: 600; }
+.save-btn[disabled] { border-color: var(--rule); color: var(--ink-muted); font-weight: 400; }
+
+.check {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--ink);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.check input[type="checkbox"] { width: 16px; height: 16px; }
+
+/* ---------- 5. 提示条（保存结果 / 冲突 / 批量操作反馈） ---------- */
+.notice {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+	font-size: 12px;
+	color: var(--ink-muted);
+	min-width: 0;
+}
+
+.notice:empty { display: none; }
+
+.notice-text { overflow-wrap: anywhere; }
+.notice-ok .notice-text { color: var(--moss); }
+.notice-error .notice-text { color: var(--alert); }
+.notice-conflict .notice-text { color: var(--alert); }
+
+/* ---------- 6. 余量区摘要（余量最紧的一条线路，已下沉到区块内） ---------- */
+.quota-summary {
+	border-bottom: 1px solid var(--rule);
+	margin: 4px 0 10px;
+}
+
+.quota-summary-inner {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 0;
+	font-size: 12px;
+}
+
+.status-label { color: var(--ink-muted); }
+.status-line { font-weight: 600; }
+
+.status-num { font-size: 12px; text-align: right; }
+.status-meta { color: var(--ink-muted); }
+.status-alert { color: var(--alert); }
+
+/* 离散格子条：填充= --moss；告急= --alert；底格= --rule。无渐变无阴影。 */
+.bar {
+	display: flex;
+	gap: 1px;
+	align-items: center;
+}
+
+.bar-cell {
+	display: block;
+	width: 8px;
+	height: 8px;
+	background: var(--rule);
+	border: 0;
+}
+
+.bar-cell.on { background: var(--moss); }
+.bar-cell.warn { background: var(--alert); }
+
+/* ---------- 7. 提示条（真实告警横幅） ---------- */
+.banners { grid-area: banners; width: 100%; }
+
+.banner {
+	border-bottom: 1px solid var(--rule);
+	padding: 8px 16px;
+	font-size: 12px;
+}
+
+.banner-title { font-weight: 600; }
+.banner-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.banner-item { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.banner-error .banner-title { color: var(--alert); }
+.banner-error { border-left: 2px solid var(--alert); }
+.banner-mock .banner-title { color: var(--indigo); }
+.banner-warn .banner-title { color: var(--ink); }
+
+/* 页脚：页面级元数据（生成时间 / 修订号） */
+.page-foot {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 0 24px;
+	border-top: 1px solid var(--rule);
+	font-size: 12px;
+	color: var(--ink-muted);
+}
+
+.page-foot-meta { font-variant-numeric: tabular-nums; }
+
+/* ---------- 8. 主区：三个区块从上到下（两表 + 一张设置项列表） ---------- */
+.main {
+	grid-area: main;
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	padding: 16px;
+	width: 100%;
+	max-width: 1680px;
+	margin: 0 auto;
+	min-width: 0;
+}
+
+/* 锚点落位：粘在顶部的顶栏要把高度让出来（否则标题被压在顶栏下面） */
+.sec {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	scroll-margin-top: 96px;
+}
+
+/* 最后一个区块留足高度，点「插件偏好」也能滚到顶部（而不是卡在页面底部滚不动） */
+#sec-prefs { min-height: calc(100vh - 60px); }
+
+.sec-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--rule);
+}
+
+/* 标题栏右侧：元信息 + 可选操作按钮（区块 2 的「全部刷新」）。
+ * overflow-wrap 可继承，窄屏（390px）时让这段长说明能逐字折行，不给文档添横向溢出。 */
+.sec-head-right {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.sec-title { font-size: 20px; font-weight: 600; }
+.sec-meta { font-size: 12px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.sec-note { font-size: 12px; color: var(--ink-muted); overflow-wrap: anywhere; }
+
+.note { font-size: 12px; color: var(--ink-muted); overflow-wrap: anywhere; }
+.empty { padding: 8px 0; }
+
+.placeholder,
+.quota-loading,
+.quota-error { padding: 24px 0; font-size: 13px; color: var(--ink-muted); }
+
+.quota-error .placeholder-text { color: var(--alert); }
+
+.placeholder-text { display: inline-block; }
+
+.retry { margin-left: 8px; }
+
+/* ---------- 9. 表格（模型能力 / 线路余量两张表共用） ---------- */
+/* 表格容器：窄屏只在这里横向滚动（B 端常规做法），文档本身不横向溢出。
+ * .tall 给主表一个最大高度，表头在容器内 sticky（19 行也能一屏扫完）。 */
+.table-wrap {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	overflow: auto;
+	border: 1px solid var(--rule);
+	background: var(--paper);
+}
+
+/* 主表固定一个内滚高度（不超过 620px）：19 行的内容永远比容器高，
+ * 表头 sticky 在容器内一定可见可验；同时不让整页被一张表拉得太长。 */
+.table-wrap.tall { max-height: min(70vh, 620px); }
+
+.tbl {
+	border-collapse: separate;
+	border-spacing: 0;
+	width: 100%;
+	font-size: 13px;
+	table-layout: auto;
+}
+
+.tbl th,
+.tbl td {
+	padding: 0 8px;
+	text-align: left;
+	vertical-align: middle;
+	white-space: nowrap;
+	border-radius: 0;
+}
+
+.tbl thead th {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--paper);
+	height: 34px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--ink-muted);
+	border-bottom: 1px solid var(--rule);
+}
+
+.tbl tbody td {
+	height: 36px;
+	border-bottom: 1px solid transparent;
+}
+
+/* 斑马纹：隔行极浅底（不是线），密表可扫 */
+.tbl tbody tr:nth-child(even) { background: var(--zebra); }
+
+/* 行 hover 高亮 */
+.tbl tbody tr:hover { background: var(--wash); }
+
+/* 表格线只画在纵向分组处：同一线路的第一行加一条顶线 */
+.tbl tbody tr.row-line-start td { border-top: 1px solid var(--rule); }
+
+/* 脏行：第一格左侧 3px 靛蓝竖条（不用阴影） */
+.tbl .cell-sel { border-left: 3px solid transparent; }
+.tbl tbody tr[data-dirty="1"] .cell-sel { border-left-color: var(--indigo); }
+/* 脏格：靛蓝淡染 */
+.tbl tbody td.cell-dirty { background: var(--wash); }
+
+.cell-empty {
+	height: 36px;
+	color: var(--ink-muted);
+	font-size: 12px;
+	white-space: normal;
+}
+
+.cell-num,
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 10. 区块 1：模型能力主表 ---------- */
+.cap-tbl { min-width: 1196px; }
+.cap-tbl .col-sel { width: 40px; }
+.cap-tbl .col-line { width: 110px; }
+.cap-tbl .col-id { width: 260px; }
+.cap-tbl .col-name { width: 170px; }
+.cap-tbl .col-img { width: 86px; }
+.cap-tbl .col-reason { width: 380px; }
+.cap-tbl .col-role { width: 150px; }
+
+/* compat 徽标：换到模型 ID 下方一行、弱化显示，绝不和 ID 粘成一串 */
+.cap-tbl .cell-id { padding-top: 4px; padding-bottom: 4px; }
+.id-text {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	line-height: 1.25;
+}
+.compat-badge {
+	display: block;
+	margin-top: 1px;
+	font-size: 11px;
+	line-height: 1.2;
+	color: var(--ink-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.cell-line { color: var(--ink); }
+.line-id { color: var(--ink-muted); font-size: 12px; margin-left: 8px; }
+
+.cell-id {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	color: var(--ink);
+	max-width: 290px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.cell-name {
+	max-width: 200px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.cell-img { display: table-cell; }
+.img-box { display: inline-flex; align-items: center; gap: 8px; }
+.img-box input[type="checkbox"] { width: 16px; height: 16px; }
+.img-state { font-size: 12px; color: var(--ink-muted); }
+
+/* 思考等级 chips：一排放得下（不许换行，保证行高 36px） */
+.chips {
+	display: inline-flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 4px;
+	vertical-align: middle;
+}
+
+.chip-btn {
+	appearance: none;
+	background: transparent;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	color: var(--ink-muted);
+	font-size: 12px;
+	line-height: 1.2;
+	padding: 2px 6px;
+	min-height: 22px;
+	white-space: nowrap;
+}
+
+.chip-btn:hover { color: var(--ink); border-color: var(--ink-muted); }
+
+/* 选中的等级 = 靛蓝（可操作/选中） */
+.chip-btn[aria-pressed="true"] {
+	border-color: var(--indigo);
+	color: var(--indigo);
+	background: var(--wash);
+	font-weight: 600;
+}
+
+/* 「+ 更多」/「收起」：虚线框，明显不是等级本身 */
+.chip-btn.more {
+	border-style: dashed;
+	color: var(--ink-muted);
+}
+
+.reason-none { font-size: 12px; color: var(--ink-muted); }
+
+/* ---------- 11. 区块 2：线路余量 ---------- */
+/* 6 列（行内「刷新」按钮已移除，改用标题栏的「全部刷新」） */
+.quota-tbl { min-width: 990px; }
+.quota-tbl .col-line { width: 170px; }
+.quota-tbl .col-type { width: 130px; }
+.quota-tbl .col-balance { width: 170px; }
+.quota-tbl .col-usage { width: 230px; }
+.quota-tbl .col-window { width: 150px; }
+.quota-tbl .col-reset { width: 190px; }
+
+.quota-tbl td.num { padding-right: 12px; }
+.quota-alert { color: var(--alert); }
+/* 整表失败行里的「重试」按钮：和说明文字留一点间距 */
+.quota-alert .btn-mini { margin-left: 8px; }
+
+/* ---------- 12. 区块 3：插件偏好（普通设置项列表，不用表格） ---------- */
+/* 用户反馈「设置没必要用表格」：改成表单式列表——
+ * 每组一个小标题（保留 features / ui 分组语义），每项左侧「标签 + 说明」、右侧控件。
+ * ≥700px 左右两栏（控件右对齐）；<700px 上下堆叠（见本段末尾）。 */
+.prefs-wrap {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	border: 1px solid var(--rule);
+	background: var(--paper);
+}
+
+.pref-group { padding: 8px 0 12px; }
+/* 分组之间只在「纵向分组处」画一条线（与表格的规则同一逻辑） */
+.pref-group + .pref-group { border-top: 1px solid var(--rule); }
+
+.pref-group-title {
+	padding: 8px 16px 4px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--ink-muted);
+}
+
+.pref-list { display: flex; flex-direction: column; }
+
+/* 条目：左「标签 + 说明」，右控件。
+ * 左缘 3px 透明边框常驻，脏标记只换颜色 → 不产生布局抖动。 */
+.pref-item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 4px 24px;
+	padding: 8px 16px 8px 13px;
+	border-left: 3px solid transparent;
+}
+
+.pref-item-text { flex: 1 1 320px; min-width: 0; }
+
+.pref-label {
+	font-size: 13px;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+.pref-desc {
+	font-size: 12px;
+	color: var(--ink-muted);
+	overflow-wrap: anywhere;
+}
+
+.pref-item-ctl {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	min-height: 32px;
+	margin-left: auto;
+}
+
+/* 脏标记：条目左缘靛蓝竖条 + 标签变靛蓝（同色相，不新增颜色） */
+.pref-item.is-dirty { border-left-color: var(--indigo); }
+.pref-item.is-dirty .pref-label { color: var(--indigo); }
+
+.pref-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.pref-ctl input[type="checkbox"] { width: 16px; height: 16px; }
+.pref-state { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+
+/* 列表里控件不再受表格的 28px 压缩规则约束，统一 32px / 13px */
+.pref-item-ctl .select { min-width: 180px; }
+.pref-item-ctl .num-input { width: 96px; height: 32px; font-size: 13px; }
+
+/* <700px：标签在上、控件在下（左对齐），长说明折行，不横向溢出 */
+@media (max-width: 699px) {
+	.pref-item {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 4px;
+	}
+	.pref-item-text { flex: 1 1 auto; width: 100%; }
+	.pref-item-ctl { margin-left: 0; min-height: 0; }
+}
+
+/* ---------- 13. 控件（表格内 / 设置项列表内） ---------- */
+.select {
+	appearance: none;
+	background: transparent;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	color: var(--ink);
+	font-size: 13px;
+	padding: 4px 8px;
+	min-height: 32px;
+	max-width: 100%;
+}
+
+.tbl .select {
+	height: 28px;
+	min-height: 28px;
+	padding: 0 6px;
+	font-size: 12px;
+}
+
+.cap-tbl .select { min-width: 120px; }
+
+/* §9.2 P0-1：线路协议不支持 system 角色开关 → 下拉置灰。
+ * 只用「颜色」置灰（--ink-muted + 细边框），**不用 opacity**：
+ * opacity 会把 --ink-muted 的实际对比度拉到 4.5:1 以下（浅色 #5D6359 只有 5.50:1，乘 0.6 就废了）。
+ * 文字色仍是冻结令牌 --ink-muted，背景仍是 --paper，对比度与其它次级文字一致。 */
+.cap-tbl .select.role-off {
+	color: var(--ink-muted);
+	background: transparent;
+	border-color: var(--rule);
+	border-style: dashed;
+	cursor: not-allowed;
+}
+
+.num-input {
+	width: 88px;
+	height: 28px;
+	padding: 0 6px;
+	font-size: 12px;
+	text-align: right;
+	background: transparent;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	color: var(--ink);
+	appearance: textfield;
+}
+
+.min-unit { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+
+/* ---------- 14. 小屏适配 ---------- */
+@media (max-width: 1023px) {
+	.btn,
+	.seg-btn,
+	.search,
+	.select,
+	.nav-item,
+	.status-link { min-height: 40px; }
+
+	.tbl .select { min-height: 32px; height: 32px; }
+	/* 表格行内的迷你按钮例外：40px 点按区会把 36px 的行顶到 41px、破坏密表行节奏，
+	 * 这里按 32px（仍 >= 桌面最小 24px）走，表格外的按钮保持 40px 点按区。 */
+	.tbl .btn-mini { min-height: 32px; }
+
+	/* 导航折叠：左栏变成顶栏下方的横向锚点条（图标 + 标签），吸在视口顶部。
+	 * 顶栏在窄屏不再吸顶，让锚点条独占顶部，滚动定位才准（区块不会被两层挡住）。 */
+	.app {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto auto auto 1fr;
+		grid-template-areas:
+			"top"
+			"nav"
+			"banners"
+			"main";
+		padding-bottom: 60px; /* 给吸底保存条留位置 */
+	}
+
+	.topbar { position: static; }
+
+	.sidenav {
+		position: sticky;
+		top: 0;
+		z-index: 15;
+		align-self: start;
+		border-right: 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.sidenav-inner {
+		flex-direction: row;
+		align-items: center;
+		gap: 12px;
+		padding: 8px 12px;
+	}
+
+	.brand { margin-right: auto; }
+	.nav { flex: 1 1 auto; min-width: 0; }
+	.nav-tip { display: none; }
+
+	.nav-list {
+		flex-direction: row;
+		align-items: stretch;
+		gap: 8px;
+		overflow-x: auto;
+	}
+
+	.nav-li { flex: 1 1 0; min-width: 0; }
+
+	/* 横向时选中态改成底部 3px 靛蓝条（竖条在横排里读不出来） */
+	.nav-item {
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		border-left: 0;
+		border-bottom: 3px solid transparent;
+		padding: 8px 12px;
+	}
+
+	.nav-item[aria-current="true"] { border-bottom-color: var(--indigo); }
+
+	.topbar-inner { padding: 8px 12px; }
+	.sec-tools { gap: 6px; }
+	.mobile-actions { display: flex; }
+	.main { padding: 12px; gap: 16px; }
+	.tools { margin-left: 0; width: 100%; }
+	.notice { margin-left: 0; width: 100%; }
+	.sec { scroll-margin-top: 64px; }
+	.table-wrap.tall { max-height: 68vh; }
+}
+
+@media (max-width: 700px) {
+	/* 手机上三个标签不再等分挤压（否则中文标签换行、锚点条变高挡住内容）：
+	 * 品牌保持一行不压缩，导航保持一行 + 允许横向滑动，锚点条高度稳定在约 57px。
+	 * 390px 下品牌 + 三项导航刚好放不下，这里把内边距/间距收紧一点让它整行放下。 */
+	.brand { flex: 0 0 auto; white-space: nowrap; }
+	.nav-li { flex: 0 0 auto; }
+	.nav-item { padding: 8px 6px; gap: 6px; }
+	.nav-list { gap: 4px; }
+	.sidenav-inner { padding: 8px 8px; }
+}
+
+@media (min-width: 1024px) {
+	/* 宽屏：左导航通高并跟随滚动（滚动时仍占满视口高度） */
+	.sidenav {
+		position: sticky;
+		top: 0;
+		align-self: start;
+		height: 100vh;
+		overflow-y: auto;
+	}
+}
+
+/* 减少动效偏好：平滑滚动交给 JS 判断（这里只管过渡/动画一律关掉） */
+@media (prefers-reduced-motion: reduce) {
+	* { transition: none !important; animation: none !important; }
+}
+
+/* ================= W2：思考等级的 wire 值输入 ================= */
+.chip-wrap {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+.wire-input {
+	width: 56px;
+	height: 20px;
+	padding: 0 3px;
+	font-size: 12px;
+	line-height: 18px;
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	background: var(--paper);
+	color: var(--ink);
+}
+.wire-input::placeholder {
+	color: var(--ink-muted);
+}
+.wire-input:focus-visible {
+	outline: 2px solid var(--indigo);
+	outline-offset: 1px;
+}
+
+/* ================= W9：设置项下方的生效提示 ================= */
+.pref-note {
+	margin-top: 3px;
+	font-size: 12px;
+	color: var(--indigo);
+}
+/* ================= W10：联动置灰 ================= */
+.pref-ctl.is-linked-off,
+.num-input.is-linked-off {
+	color: var(--ink-muted);
+	border-color: var(--rule);
+	background: transparent;
+	cursor: not-allowed;
+}
+.num-input.is-linked-off {
+	background: var(--zebra);
+}
+
+/* ================= W6：余量表「操作」列 ================= */
+.quota-tbl .col-action {
+	width: 88px;
+	text-align: right;
+	white-space: nowrap;
+}
+.quota-tbl td.col-action .btn-mini {
+	height: 24px;
+	padding: 0 8px;
+	font-size: 12px;
+}
+/* ================= W7：展开全部（N） ================= */
+.quota-more-row {
+	display: flex;
+	justify-content: flex-end;
+	padding: 8px 2px 0;
+}
+
+/* ================= W1：继承自… 入口与弹窗 ================= */
+.inherit-link {
+	font-size: 12px;
+	line-height: 20px;
+	padding: 0 4px;
+	border: 1px solid transparent;
+	border-radius: 0;
+	background: transparent;
+	color: var(--indigo);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.inherit-link:hover,
+.inherit-link:focus-visible {
+	border-color: var(--rule);
+	text-decoration: underline;
+	outline: none;
+}
+
+.dlg-mask {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(22, 25, 28, 0.45);
+	padding: 24px;
+}
+.dlg {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	width: min(720px, 100%);
+	max-height: min(720px, calc(100vh - 48px));
+	background: var(--paper);
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	padding: 16px;
+	box-shadow: none;
+}
+.dlg-head {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.dlg-title {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--ink);
+}
+.dlg-sub {
+	font-size: 12px;
+	color: var(--ink-muted);
+	line-height: 1.5;
+}
+.dlg-target-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--ink-muted);
+}
+.dlg-target {
+	color: var(--ink);
+	font-size: 12px;
+}
+.dlg .dlg-search {
+	/* 顶栏的 .search 带 flex:1 + max-width:260px；放进弹窗要覆盖掉这两个约束 */
+	flex: 0 0 auto;
+	width: 100%;
+	max-width: none;
+	height: 32px;
+	min-height: 32px;
+	max-height: 32px;
+}
+.dlg-body {
+	flex: 1 1 auto;
+	min-height: 120px;
+	overflow: auto;
+	border-top: 1px solid var(--rule);
+	border-bottom: 1px solid var(--rule);
+	padding: 8px 0;
+}
+.dlg-state {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 16px 4px;
+	font-size: 13px;
+	color: var(--ink-muted);
+}
+.dlg-group + .dlg-group {
+	margin-top: 10px;
+}
+.dlg-group-title {
+	font-size: 12px;
+	color: var(--ink-muted);
+	padding: 4px;
+}
+.dlg-group-items {
+	display: flex;
+	flex-direction: column;
+}
+.dlg-item {
+	display: grid;
+	grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.2fr) auto;
+	gap: 8px;
+	align-items: baseline;
+	padding: 6px 8px;
+	border: 1px solid transparent;
+	border-radius: 0;
+	background: transparent;
+	text-align: left;
+	cursor: pointer;
+	font-size: 13px;
+	color: var(--ink);
+}
+.dlg-item:hover,
+.dlg-item:focus-visible {
+	background: var(--zebra);
+	border-color: var(--rule);
+	outline: none;
+}
+.dlg-item-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dlg-item-id {
+	font-size: 12px;
+	color: var(--ink-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dlg-item-meta {
+	font-size: 12px;
+	color: var(--ink-muted);
+	white-space: nowrap;
+}
+.dlg-foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+@media (max-width: 699px) {
+	.dlg-mask { padding: 0; align-items: stretch; }
+	.dlg { width: 100%; max-height: 100vh; }
+	.dlg-item { grid-template-columns: 1fr auto; }
+	.dlg-item-id { grid-column: 1 / -1; }
+}
