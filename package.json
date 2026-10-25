@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-toolkit",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "模型能力设置 + 提供商徽章与余额查询：为手写模型设置图片输入与推理强度，并在输入框显示当前模型所属提供商及其余量。",
   "type": "module",
   "main": "lib/index.js",
