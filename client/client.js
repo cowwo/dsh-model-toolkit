@@ -1105,6 +1105,10 @@ window.__ModuleLoader__.load({
 		const ML_EXTERNAL_ATTR = "data-dsh-model-label-external";
 		const ML_API_BASE = "/dsh-model-toolkit/api";
 		const ML_TICK_MS = 3000;              // 运行中行的兜底刷新间隔
+		const ML_CACHE_KEY = "dsh-model-label-cache-v1";   // 会话 id → 上一份取数结果（跨刷新保留）
+		const ML_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // 缓存最长存活 7 天
+		const ML_CACHE_MAX_SESSIONS = 12;                  // 最多记 12 个会话，超出丢最旧的
+		const ML_CACHE_FRESH_MS = 60 * 1000;               // 60 秒内的缓存视为“新鲜”，只渲染不打接口
 		const ML_DEBOUNCE_MS = 16;            // MutationObserver 合并窗口：压到一帧，避免 React 重渲染后标签"闪一下"
 		const ML_SETTINGS_EVERY_TICKS = 10;   // 约 30 秒重读一次开关，改设置免刷新
 		const ML_FAIL_BACKOFF_MS = 60000;     // 接口失败后的静默退避
@@ -1173,6 +1177,73 @@ window.__ModuleLoader__.load({
 				} catch (e) { return Promise.resolve(null); }
 			};
 			return Promise.resolve(viaRpc).then((found) => found || viaState());
+		}
+
+		/**
+		 * 标签数据缓存：会话 id → { rows, turns, at }。
+		 * 作用：打开浮层/刷新页面时**先用缓存立刻渲染**，再后台校正；
+		 * 不用等接口回来才出现文字。内存优先，localStorage 只做跨刷新持久化（失败忽略）。
+		 */
+		const labelCacheMemory = new Map();
+		let labelCacheLoaded = false;
+		function loadLabelCacheStore() {
+			if (labelCacheLoaded) return;
+			labelCacheLoaded = true;
+			try {
+				const raw = typeof localStorage !== "undefined" && localStorage ? localStorage.getItem(ML_CACHE_KEY) : null;
+				if (!raw) return;
+				const parsed = JSON.parse(raw);
+				const sessions = parsed && parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : null;
+				if (!sessions) return;
+				const now = Date.now();
+				for (const sid of Object.keys(sessions)) {
+					const item = sessions[sid];
+					if (!item || typeof item !== "object") continue;
+					if (!Number.isFinite(item.at) || now - item.at > ML_CACHE_TTL_MS) continue;
+					labelCacheMemory.set(sid, item);
+				}
+			} catch (e) { /* 缓存坏了就当没有 */ }
+		}
+		function persistLabelCacheStore() {
+			try {
+				if (typeof localStorage === "undefined" || !localStorage) return;
+				const sessions = {};
+				labelCacheMemory.forEach((v, k) => { sessions[k] = v; });
+				localStorage.setItem(ML_CACHE_KEY, JSON.stringify({ v: 1, sessions }));
+			} catch (e) { /* 配额满/禁用：只影响跨刷新，不影响本次显示 */ }
+		}
+		function pruneLabelCache() {
+			const now = Date.now();
+			labelCacheMemory.forEach((v, k) => {
+				if (!v || !Number.isFinite(v.at) || now - v.at > ML_CACHE_TTL_MS) labelCacheMemory.delete(k);
+			});
+			if (labelCacheMemory.size <= ML_CACHE_MAX_SESSIONS) return;
+			const sorted = [...labelCacheMemory.entries()].sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+			for (const [k] of sorted.slice(ML_CACHE_MAX_SESSIONS)) labelCacheMemory.delete(k);
+		}
+		function readLabelCache(sessionId) {
+			if (!sessionId) return null;
+			loadLabelCacheStore();
+			const hit = labelCacheMemory.get(sessionId);
+			if (!hit) return null;
+			if (!Number.isFinite(hit.at) || Date.now() - hit.at > ML_CACHE_TTL_MS) {
+				labelCacheMemory.delete(sessionId);
+				return null;
+			}
+			return hit;
+		}
+		function writeLabelCache(sessionId, patch) {
+			if (!sessionId) return;
+			loadLabelCacheStore();
+			const prev = labelCacheMemory.get(sessionId) || {};
+			const next = {
+				rows: Array.isArray(patch.rows) ? patch.rows : (Array.isArray(prev.rows) ? prev.rows : null),
+				turns: Array.isArray(patch.turns) ? patch.turns : (Array.isArray(prev.turns) ? prev.turns : null),
+				at: Date.now()
+			};
+			labelCacheMemory.set(sessionId, next);
+			pruneLabelCache();
+			persistLabelCacheStore();
 		}
 
 		/**
@@ -1347,8 +1418,39 @@ window.__ModuleLoader__.load({
 			node.style.cssText = style.join(";");
 			const text = doc.createElement("span");
 			text.setAttribute(ML_TEXT_ATTR, kind);
+			text.style.fontWeight = "500";
 			node.appendChild(text);
 			return node;
+		}
+
+		/** 高亮用的蓝：浅色主题深蓝、深色主题浅蓝（按页面实际底色判断，不依赖具体主题变量名）。 */
+		const ML_COLOR_LIGHT = "#2563eb";
+		const ML_COLOR_DARK = "#7aa2ff";
+		function pageLooksDark(doc) {
+			try {
+				const win = doc.defaultView || (typeof window !== "undefined" ? window : null);
+				if (!win || typeof win.getComputedStyle !== "function") return false;
+				const probe = (el) => {
+					if (!el) return null;
+					const raw = win.getComputedStyle(el).backgroundColor || "";
+					const m = /rgba?\(([^)]+)\)/.exec(raw);
+					if (!m) return null;
+					const parts = m[1].split(",").map((v) => Number(v.trim()));
+					if (parts.length < 3 || parts.some((v) => !Number.isFinite(v))) return null;
+					const alpha = parts.length > 3 ? parts[3] : 1;
+					if (alpha < 0.5) return null; // 透明底色说明要看更外层
+					return parts;
+				};
+				const rgb = probe(doc.body) || probe(doc.documentElement);
+				if (!rgb) return false;
+				const [r, g, b] = rgb;
+				const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+				return luminance < 0.45;
+			} catch (e) { return false; }
+		}
+		function applyModelLabelColor(doc, node) {
+			const next = pageLooksDark(doc) ? ML_COLOR_DARK : ML_COLOR_LIGHT;
+			if (node.style.color !== next) node.style.color = next;
 		}
 
 		/** 取 host 直接子级里属于我们的标签（按 kind 过滤）。 */
@@ -1601,6 +1703,7 @@ window.__ModuleLoader__.load({
 					const node = ensureModelLabel(doc, col, "subagent");
 					placeSubagentLabel(col, node);
 					setModelLabelText(node, text);
+					applyModelLabelColor(doc, node);
 					setModelLabelExternal(doc, node, external);
 					applyModelLabelWidthGate(node, col, ML_MIN_WIDTH_SUBAGENT);
 					keep.add(node);
@@ -1624,6 +1727,7 @@ window.__ModuleLoader__.load({
 					if (hasOfficialModelText(rowEl)) { dropModelLabelIn(rowEl, kind); return; }
 					const node = ensureModelLabel(doc, rowEl, kind);
 					setModelLabelText(node, text);
+					applyModelLabelColor(doc, node);
 					// 用户消息那一行本身就很窄（只有时间 + 复制），用更小的阈值，否则永远不会显示。
 					applyModelLabelWidthGate(node, rowEl, kind === "user" ? ML_MIN_WIDTH_USER : ML_MIN_WIDTH_MESSAGE);
 					keep.add(node);
@@ -1651,39 +1755,76 @@ window.__ModuleLoader__.load({
 			 */
 			const loadData = async (force) => {
 				const sessionId = getSessionId();
-				const wantSubagents = mlSettings.subagentModelLabel && query(ML_SELECTOR.tree).length > 0;
-				const wantTurns = mlSettings.messageModelLabel
-					&& query(ML_SELECTOR.assistantRow + ", " + ML_SELECTOR.userRow).length > 0;
+				// 不再依赖“浮层是否打开”：页面一加载就把数据备好，打开浮层直接用现成的。
+				const wantSubagents = mlSettings.subagentModelLabel;
+				const wantTurns = mlSettings.messageModelLabel;
 				// 会话 id 一瞬取不到（切会话、DOM 重建）：保留旧数据，直接不动。
 				if (typeof sessionId !== "string" || !sessionId) return;
-				// 真正换会话才丢缓存（旧会话的模型不能带到新会话上）。
+				// 换会话时先把缓存灌进来（旧会话的模型不能带到新会话上）。
 				const sessionChanged = sessionId !== lastSessionId;
 				if (sessionChanged) {
 					lastSessionId = sessionId;
 					lastFetchAt = 0;
-					subagentRows = null;
-					turns = null;
+					hydrateFromCache(sessionId);
+				}
+				const cached = readLabelCache(sessionId);
+				const cacheFresh = !!cached && Number.isFinite(cached.at) && Date.now() - cached.at < ML_CACHE_FRESH_MS;
+				// 新鲜缓存 + 两类数据都在：只渲染，不打接口 —— “打开就有”就靠这一条。
+				if (!force && cacheFresh && Array.isArray(subagentRows) && Array.isArray(turns)) {
+					lastFetchAt = Date.now();
+					return;
 				}
 				// 节流：复用上一轮数据，只重渲染。
 				if (!force && !sessionChanged && Date.now() - lastFetchAt < ML_FETCH_MIN_MS) return;
 				lastFetchAt = Date.now();
+				let changed = false;
 				const jobs = [];
-				// 浮层没开就先不取，但也**不清空**已有缓存（重新打开时立即用缓存渲染，不闪）。
 				jobs.push(wantSubagents
 					? readSubagentsEndpoint(sessionId, fetchImpl).then((body) => {
-						if (body && Array.isArray(body.rows)) subagentRows = body.rows;
+						if (body && Array.isArray(body.rows)) {
+							const nextRaw = JSON.stringify(body.rows);
+							if (nextRaw !== JSON.stringify(subagentRows)) changed = true;
+							subagentRows = body.rows;
+						}
 					})
 					: Promise.resolve());
 				jobs.push(wantTurns
 					? readTurnsEndpoint(sessionId, fetchImpl).then((body) => {
-						if (body && Array.isArray(body.turns)) turns = body.turns;
+						if (body && Array.isArray(body.turns)) {
+							const nextRaw = JSON.stringify(body.turns);
+							if (nextRaw !== JSON.stringify(turns)) changed = true;
+							turns = body.turns;
+						}
 					})
 					: Promise.resolve());
 				await Promise.all(jobs);
+				// 取到了就写回缓存：下次打开/刷新页面直接命中。
+				if (Array.isArray(subagentRows) || Array.isArray(turns)) {
+					if (changed || !cached) writeLabelCache(sessionId, { rows: subagentRows, turns });
+				}
 			};
 
+			/** 会话切换时同步吃缓存：拿到就立刻有一份可渲染的数据。 */
+			const hydrateFromCache = (sessionId) => {
+				if (!sessionId) return;
+				const cached = readLabelCache(sessionId);
+				subagentRows = cached && Array.isArray(cached.rows) ? cached.rows : null;
+				turns = cached && Array.isArray(cached.turns) ? cached.turns : null;
+			};
+
+			/**
+			 * 一轮完整刷新：**先渲染（用内存/缓存里的现成数据）→ 再取数 → 再渲染校正**。
+			 * 这样打开浮层或刷新页面时，标签是同步出现的，不会有一段“空白等待期”。
+			 */
 			const pass = async (force) => {
 				if (disposed) return;
+				const sessionId = getSessionId();
+				if (typeof sessionId === "string" && sessionId && sessionId !== lastSessionId) {
+					lastSessionId = sessionId;
+					lastFetchAt = 0;
+					hydrateFromCache(sessionId);
+				}
+				try { render(); } catch (e) { /* 渲染失败不影响取数 */ }
 				try {
 					await loadData(force === true);
 					render();
