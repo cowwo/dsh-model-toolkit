@@ -6,6 +6,30 @@
 
 发布时在版本号后补上日期（`## [x.y.z] - YYYY-MM-DD`）。
 
+## [0.5.0] - 2026-10-25
+
+**模型标识（model label）**：在子智能体浮层、助手回复轮尾、用户消息行追加 `提供商/模型` 字样。
+全部是**纯追加**节点：不删除、不改写、不移动、不隐藏任何官方元素；官方以后若自带同类信息则自动让位。
+
+### Added
+
+- **子智能体浮层**：每行新增第 3 行显示该子会话最近实际使用的 `provider/model`；
+  外部执行行显示灰色「外部」；该子会话用过多个模型时追加「用过 N 个」。
+- **消息行**：助手回复轮尾与用户消息行动作行末尾追加 `provider/model`，
+  支持「仅在模型变化时」与「每条都标」两种时机；两者都保留官方按钮、用量与时间。
+- **主机侧两条只读接口**：`GET /dsh-model-toolkit/api/subagents?sessionId=` 与
+  `GET /dsh-model-toolkit/api/turns?sessionId=`（400/405/500/503 分支齐全，会话租约用完即释放）。
+- **设置页「模型标识」分组**：`subagentModelLabel`、`messageModelLabel`、
+  `messageModelLabelMode`（change-only / always）、`changedModelBadge`，存 `dsh-provider-info.json`。
+
+### Fixed
+
+- 可选服务读取未声明 inject 导致接口永久 503：改用 `ctx.get()` 兜底 + `ctx.inject()` 捕获。
+- 新版 DSH 的会话列表快照没有 `current` 字段：改从聊天容器的 `data-conversation-session` 取当前会话。
+- `providerBadge/settings` RPC 不可用时设置读不到：回退 `GET /api/state` 的 prefs。
+- 宽度阈值按真实布局重测（子智能体内容列约 210px、用户消息动作行更窄），避免标签被误判「放不下」而隐藏。
+- 取数失败/浮层暂时关闭时不再清空缓存，修复标签「一瞬间消失又出现」的闪烁。
+
 ## [0.2.0] - 2026-10-19
 
 **独立整页设置页落地**：设置面板收敛为「模型工具箱」单入口，全部能力搬进 `web/` 独立页（三张表 + 锚点导航 + 增量保存）。

@@ -991,6 +991,23 @@ a { color: var(--indigo); }
 	background: var(--zebra);
 }
 
+/* 模型标识（新增的「模型标识」分组）：下拉与勾选框也会联动置灰。
+ * 与 W10 的 num-input 同一口径：只换颜色/底色（--ink-muted / --rule / --zebra），不用 opacity，
+ * 因为 --zebra 在暗色主题里是浅色叠加、--rule 已随主题切换，两套主题的对比度都不会掉。 */
+.select.is-linked-off {
+	color: var(--ink-muted);
+	border-color: var(--rule);
+	background: var(--zebra);
+	cursor: not-allowed;
+}
+.pref-ctl.is-linked-off input[type="checkbox"] {
+	accent-color: var(--ink-muted);
+	cursor: not-allowed;
+}
+.pref-ctl.is-linked-off .pref-state {
+	color: var(--ink-muted);
+}
+
 /* ================= W6：余量表「操作」列 ================= */
 .quota-tbl .col-action {
 	width: 88px;

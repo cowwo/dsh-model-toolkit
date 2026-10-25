@@ -180,6 +180,7 @@
 			'pref.hint': '在右侧控件上直接改；改动后点右上角「保存」写入插件配置。',
 			'pref.group.features': '功能开关',
 			'pref.group.ui': '界面与刷新',
+			'pref.group.model': '模型标识',
 			'pref.badgeAndQuota': '启用提供商徽章与余量',
 			'pref.badgeAndQuota.desc': '悬浮面板里显示线路徽章与余量。',
 			/* W9：生效提示 */
@@ -197,6 +198,19 @@
 			'pref.fontSize.desc': '插件自身的界面字号。',
 			'pref.language': '界面语言',
 			'pref.language.desc': '插件自身的界面语言，与页面右上角的语言切换各自独立。',
+			/* 模型标识：子代理行尾 / 消息轮尾的模型标签 */
+			'pref.subagentModelLabel': '子代理模型标识',
+			'pref.subagentModelLabel.desc': '在子代理条目后面显示它用的线路与模型（外部执行没有本地会话，不显示）。',
+			'pref.messageModelLabel': '消息模型标识',
+			'pref.messageModelLabel.desc': '在每轮答复末尾显示这一轮实际使用的模型。',
+			'pref.messageModelLabelMode': '显示时机',
+			'pref.messageModelLabelMode.desc': '只在模型变化时显示，还是每轮都显示。',
+			'pref.messageModelLabelMode.change-only': '仅模型变化时',
+			'pref.messageModelLabelMode.always': '每轮都显示',
+			'pref.changedModelBadge': '变化徽标',
+			'pref.changedModelBadge.desc': '子代理用过不止一个模型时，在标识后补一句「用过 N 个」。',
+			'pref.modelLabel.off': '先打开「消息模型标识」才能改这一项',
+			'pref.modelLabel.off.subagent': '先打开「子代理模型标识」才能改这一项',
 			'pref.minUnit': '分钟',
 			'pref.fontSize.small': '小',
 			'pref.fontSize.middle': '中',
@@ -370,6 +384,7 @@
 			'pref.hint': 'Edit the controls on the right; then click Save in the top right to write the plugin config.',
 			'pref.group.features': 'Feature switches',
 			'pref.group.ui': 'Interface and refresh',
+			'pref.group.model': 'Model labels',
 			'pref.badgeAndQuota': 'Enable provider badges and quota',
 			'pref.badgeAndQuota.desc': 'Show line badges and quota in the hover panel.',
 			'pref.badgeAndQuota.apply': 'Takes effect after refreshing the DSH page',
@@ -386,6 +401,18 @@
 			'pref.fontSize.desc': 'The plugin own interface font size.',
 			'pref.language': 'Interface language',
 			'pref.language.desc': 'The plugin own UI language; independent from the page language switch above.',
+			'pref.subagentModelLabel': 'Subagent model label',
+			'pref.subagentModelLabel.desc': 'Show the line and model used by each subagent entry (external runs have no local session and are left unlabeled).',
+			'pref.messageModelLabel': 'Message model label',
+			'pref.messageModelLabel.desc': 'Show the model actually used at the end of every turn.',
+			'pref.messageModelLabelMode': 'When to show',
+			'pref.messageModelLabelMode.desc': 'Only when the model changes, or on every turn.',
+			'pref.messageModelLabelMode.change-only': 'Only when it changes',
+			'pref.messageModelLabelMode.always': 'Every turn',
+			'pref.changedModelBadge': 'Changed-model badge',
+			'pref.changedModelBadge.desc': 'When a subagent has used more than one model, append "used N models" after the label.',
+			'pref.modelLabel.off': 'Turn on “Message model label” first to edit this item',
+			'pref.modelLabel.off.subagent': 'Turn on “Subagent model label” first to edit this item',
 			'pref.minUnit': 'minutes',
 			'pref.fontSize.small': 'Small',
 			'pref.fontSize.middle': 'Medium',
@@ -477,7 +504,11 @@
 			autoRefreshMin: 15,
 			showMore: false,
 			fontSize: 'middle',
-			language: 'system'
+			language: 'system',
+			subagentModelLabel: true,
+			messageModelLabel: true,
+			messageModelLabelMode: 'change-only',
+			changedModelBadge: true
 		}
 	}
 
@@ -2061,11 +2092,13 @@
 		return 'unknown'
 	}
 
-	/* ---------- 区块 3：插件偏好（7 项，普通设置项列表：左标签 + 说明，右控件） ---------- */
+	/* ---------- 区块 3：插件偏好（11 项，普通设置项列表：左标签 + 说明，右控件） ---------- */
 	/* §9.1：capabilityEditor 控制的分区已从 DSH 设置里删除，这一项失去作用对象 →
 	 * 不再出现在列表里（8 项变 7 项），也不再进保存增量。
 	 * 形态：用户反馈「设置没必要用表格」→ 改成表单式列表，分组用区块小标题。
-	 * 分组语义（features / ui）与顺序不变；控件类型、脏标记、保存增量逻辑全部不变。 */
+	 * 分组语义（features / ui / model）与顺序不变；控件类型、脏标记、保存增量逻辑全部不变。
+	 * model 组（子代理 / 消息轮尾的模型标识）是新增的 4 项，单独一组放在最后，
+	 * 其中「显示时机」与「变化徽标」受上级开关 messageModelLabel 联动置灰。 */
 	var REMOVED_PREF_KEYS = { capabilityEditor: true }
 
 	function prefRows() {
@@ -2076,7 +2109,12 @@
 			{ key: 'autoRefreshMin', group: 'ui', kind: 'number' },
 			{ key: 'showMore', group: 'ui', kind: 'bool' },
 			{ key: 'fontSize', group: 'ui', kind: 'select', options: ['small', 'middle', 'large'], labelKey: 'pref.fontSize.' },
-			{ key: 'language', group: 'ui', kind: 'select', options: ['system', 'zh', 'en'], labelKey: 'pref.lang.' }
+			{ key: 'language', group: 'ui', kind: 'select', options: ['system', 'zh', 'en'], labelKey: 'pref.lang.' },
+			/* 模型标识：子代理行尾 / 消息轮尾（后两项受 messageModelLabel 联动置灰） */
+			{ key: 'subagentModelLabel', group: 'model', kind: 'bool' },
+			{ key: 'messageModelLabel', group: 'model', kind: 'bool' },
+			{ key: 'messageModelLabelMode', group: 'model', kind: 'select', options: ['change-only', 'always'], labelKey: 'pref.messageModelLabelMode.' },
+			{ key: 'changedModelBadge', group: 'model', kind: 'bool' }
 		]
 	}
 
@@ -2131,6 +2169,10 @@
 							/* W9：这个开关影响 DSH 页面里徽章槽位的注册，改完必须刷新 DSH 页面才生效 */
 							item.key === 'badgeAndQuota'
 								? h('div', { class: 'pref-note', text: t('pref.badgeAndQuota.apply') })
+								: null,
+							/* 联动置灰的原因也写在下面一行：只靠 title 提示，键盘/触屏用户看不到 */
+							prefOffReason(item.key)
+								? h('div', { class: 'pref-note', text: prefOffReason(item.key) })
 								: null
 						),
 						h('div', { class: 'pref-item-ctl' }, prefControl(item))
@@ -2145,10 +2187,23 @@
 		)
 	}
 
+	/**
+	 * 联动置灰（W10 + 模型标识）：上级开关关掉时，依赖它的控件禁用并给出一句原因。
+	 * 返回原因文案（没有联动就返回空串）。只禁用、不隐藏 —— 用户仍看得到这一项存在。
+	 */
+	function prefOffReason(key) {
+		if (key === 'autoRefreshMin' && prefs().autoRefreshOn !== true) return t('pref.autoRefreshMin.off')
+		/* 模型标识：显示时机属于「消息模型标识」，换模型徽标属于「子代理模型标识」，各自跟上级联动 */
+		if (key === 'messageModelLabelMode' && prefs().messageModelLabel !== true) return t('pref.modelLabel.off')
+		if (key === 'changedModelBadge' && prefs().subagentModelLabel !== true) return t('pref.modelLabel.off.subagent')
+		return ''
+	}
+
 	function prefControl(item) {
 		var p = prefs()
 		var cur = p[item.key]
 		var key = item.key
+		var offReason = prefOffReason(key)
 
 		if (item.kind === 'bool') {
 			var on = cur === true
@@ -2159,7 +2214,13 @@
 				onchange: function (ev) { setPref(key, !!ev.target.checked) }
 			})
 			box.checked = on
-			return h('span', { class: 'pref-ctl' },
+			if (offReason) {
+				box.disabled = true
+				box.setAttribute('disabled', 'disabled')
+				box.setAttribute('aria-disabled', 'true')
+				box.title = offReason
+			}
+			return h('span', { class: 'pref-ctl' + (offReason ? ' is-linked-off' : '') },
 				box,
 				h('span', { class: 'pref-state', text: on ? t('value.on') : t('value.off') })
 			)
@@ -2183,13 +2244,13 @@
 				}
 			})
 			/* W10：与旧设置面板一致——「定时刷新」关闭时，间隔输入框禁用并变淡 */
-			var linkedOff = key === 'autoRefreshMin' && prefs().autoRefreshOn !== true
+			var linkedOff = !!offReason
 			if (linkedOff) {
 				input.disabled = true
 				input.setAttribute('disabled', 'disabled')
 				input.setAttribute('aria-disabled', 'true')
 				input.classList.add('is-linked-off')
-				input.title = t('pref.autoRefreshMin.off')
+				input.title = offReason
 			}
 			return h('span', { class: 'pref-ctl' + (linkedOff ? ' is-linked-off' : '') },
 				input,
@@ -2201,7 +2262,7 @@
 		var sv = String(cur == null ? '' : cur)
 		if (sv && opts.indexOf(sv) < 0) opts.push(sv) /* 未知取值：补一个选项原样显示，避免误导 */
 		var sel = h('select', {
-			class: 'select',
+			class: 'select' + (offReason ? ' is-linked-off' : ''),
 			'data-pref-ctl': key,
 			'aria-label': t('pref.' + key),
 			onchange: function (ev) { setPref(key, ev.target.value) }
@@ -2209,7 +2270,14 @@
 			return h('option', { value: o, text: t(item.labelKey + o) })
 		}))
 		sel.value = sv
-		return h('span', { class: 'pref-ctl' }, sel)
+		/* 「显示时机」在「消息模型标识」关闭时同样禁用（与 autoRefreshMin 同一套置灰口径） */
+		if (offReason) {
+			sel.disabled = true
+			sel.setAttribute('disabled', 'disabled')
+			sel.setAttribute('aria-disabled', 'true')
+			sel.title = offReason
+		}
+		return h('span', { class: 'pref-ctl' + (offReason ? ' is-linked-off' : '') }, sel)
 	}
 
 	function baselinePref(key) {

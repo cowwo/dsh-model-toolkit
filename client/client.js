@@ -1090,9 +1090,709 @@ window.__ModuleLoader__.load({
 				}, text);
 			};
 		}
+		//#region 模型标签：子智能体浮层行 / 助手轮尾 / 用户消息行（纯追加 DOM）
+		/**
+		 * 设计约束（与官方槽位徽章完全解耦）：
+		 *  - 只往官方节点里**追加**我们自己的 span：不删、不改、不遮蔽任何官方节点；
+		 *  - 命中判断只用稳定属性：role / aria-label / data-clock / data-turn-tail /
+		 *    data-chat-turn；必要时用 CSS Module 类名的**后缀**（_content/_summary/_metrics），
+		 *    不用带哈希前缀的整串类名（每次构建都会变）；
+		 *  - 拿不到数据、接口 404、会话 id 缺失一律静默降级（不显示、不刷屏，只记一次日志）；
+		 *  - 每轮渲染都是「对账」：本轮没触达的标签全部移除 —— 重复触发不会重复，关开关即清空。
+		 */
+		const ML_ATTR = "data-dsh-model-label";
+		const ML_TEXT_ATTR = "data-dsh-model-label-text";
+		const ML_EXTERNAL_ATTR = "data-dsh-model-label-external";
+		const ML_API_BASE = "/dsh-model-toolkit/api";
+		const ML_TICK_MS = 3000;              // 运行中行的兜底刷新间隔
+		const ML_DEBOUNCE_MS = 16;            // MutationObserver 合并窗口：压到一帧，避免 React 重渲染后标签"闪一下"
+		const ML_SETTINGS_EVERY_TICKS = 10;   // 约 30 秒重读一次开关，改设置免刷新
+		const ML_FAIL_BACKOFF_MS = 60000;     // 接口失败后的静默退避
+		const ML_FETCH_MIN_MS = 1500;         // 取数最小间隔：流式输出时 DOM 变化很密，只重渲染不重取数
+		const ML_MIN_WIDTH_MESSAGE = 420;     // 助手轮尾行容器 < 420px 时隐藏标签
+		const ML_MIN_WIDTH_USER = 150;        // 用户消息的动作行更窄（时间 + 复制），阈值单独给
+		const ML_MIN_WIDTH_SUBAGENT = 150;    // 浮层树的内容列实测约 210px（整个菜单 330px），阈值取 150 才不会被误判隐藏
+		const ML_SELECTOR = {
+			tree: 'div[role="tree"][aria-label="子智能体会话"], div[role="tree"][aria-label="Subagent sessions"]',
+			treeRow: 'div[role="treeitem"]',
+			assistantRow: 'div[data-clock="end"]',
+			userRow: 'div[data-clock="start"]'
+		};
+		const ML_DEFAULTS = { subagentModelLabel: true, messageModelLabel: true, messageModelLabelMode: "change-only", changedModelBadge: true };
+		/** 设置镜像；缺字段按默认 true / true / change-only / true。 */
+		const mlSettings = Object.assign({}, ML_DEFAULTS);
+		/** 当前已安装实例：重复安装先拆旧实例，全局只保留一份。 */
+		let mlInstalled = null;
+
+		/** 用 host 返回的设置覆盖镜像（只认四个键；缺字段保持默认）。 */
+		function mergeModelLabelSettings(input) {
+			if (!input || typeof input !== "object") return mlSettings;
+			if (typeof input.subagentModelLabel === "boolean") mlSettings.subagentModelLabel = input.subagentModelLabel;
+			if (typeof input.messageModelLabel === "boolean") mlSettings.messageModelLabel = input.messageModelLabel;
+			if (input.messageModelLabelMode === "change-only" || input.messageModelLabelMode === "always") mlSettings.messageModelLabelMode = input.messageModelLabelMode;
+			if (typeof input.changedModelBadge === "boolean") mlSettings.changedModelBadge = input.changedModelBadge;
+			return mlSettings;
+		}
+
+		/** 从 RPC 回包里挑出设置对象（兼容 { settings } / 直接平铺两种形状）。 */
+		function pickModelLabelSettingsPayload(resp) {
+			if (!resp || typeof resp !== "object") return null;
+			const value = resp.value && typeof resp.value === "object" ? resp.value : null;
+			if (value && value.settings && typeof value.settings === "object") return value.settings;
+			const flat = value || resp;
+			if (typeof flat.subagentModelLabel === "boolean"
+				|| typeof flat.messageModelLabel === "boolean"
+				|| typeof flat.messageModelLabelMode === "string"
+				|| typeof flat.changedModelBadge === "boolean") return flat;
+			return null;
+		}
+
+		/**
+		 * 读开关。两条路，任一成功即可：
+		 *  1) 老路：providerBadge/settings RPC（部分宿主/版本没有这个 RPC）；
+		 *  2) 新路：直接 GET /dsh-model-toolkit/api/state 里的 prefs（同一份设置文件）。
+		 * 都失败就返回 null，调用方按默认（全开 + change-only）处理，绝不报错刷屏。
+		 */
+		function readModelLabelSettings(rpc) {
+			const viaRpc = (() => {
+				if (!rpc || typeof rpc.call !== "function") return Promise.resolve(null);
+				try {
+					return Promise.resolve(rpc.call("/api", "providerBadge/settings", { args: { request: { op: "get" } } }))
+						.then((resp) => (resp && resp.ok ? pickModelLabelSettingsPayload(resp) : null))
+						.catch(() => null);
+				} catch (e) { return Promise.resolve(null); }
+			})();
+			const viaState = () => {
+				try {
+					const fetchImpl = typeof fetch === "function" ? fetch : null;
+					if (!fetchImpl) return Promise.resolve(null);
+					return Promise.resolve(fetchImpl(ML_API_BASE + "/state", { credentials: "same-origin", headers: { accept: "application/json" } }))
+						.then((resp) => (resp && resp.ok ? resp.json() : null))
+						.then((body) => pickModelLabelSettingsPayload(body && body.prefs ? { ok: true, value: { settings: body.prefs } } : null))
+						.catch(() => null);
+				} catch (e) { return Promise.resolve(null); }
+			};
+			return Promise.resolve(viaRpc).then((found) => found || viaState());
+		}
+
+		/**
+		 * 当前根会话 id。取不到返回 null（标签静默不显示），按以下顺序：
+		 *  1) sessions store 快照的 current（老版本 DSH 才有）；
+		 *  2) 聊天容器的 data-conversation-session / data-sidebar-right-session
+		 *     （DSH 0.2.x 的会话列表快照里没有 current，活动会话只挂在 DOM 上）；
+		 *  3) sessions.current。
+		 */
+		function modelLabelSessionId(sessions) {
+			const fromStore = () => {
+				try {
+					const list = sessions && sessions.list;
+					const snap = list && typeof list.getSnapshot === "function" ? list.getSnapshot() : null;
+					if (snap && typeof snap.current === "string" && snap.current) return snap.current;
+				} catch (e) { /* 继续兜底 */ }
+				try {
+					if (sessions && typeof sessions.current === "string" && sessions.current) return sessions.current;
+				} catch (e) { /* 继续兜底 */ }
+				return null;
+			};
+			const fromDom = () => {
+				try {
+					const doc = typeof document !== "undefined" ? document : null;
+					if (!doc) return null;
+					const el = doc.querySelector("[data-conversation-session]") || doc.querySelector("[data-sidebar-right-session]");
+					if (!el) return null;
+					const raw = el.getAttribute("data-conversation-session") || el.getAttribute("data-sidebar-right-session");
+					return typeof raw === "string" && raw ? raw : null;
+				} catch (e) { return null; }
+			};
+			return () => fromStore() || fromDom();
+		}
+
+		/** provider/model 文本：斜杠两侧不留空格；缺一侧就只显示另一侧。 */
+		function modelLabelText(row) {
+			if (!row || typeof row !== "object") return "";
+			const provider = typeof row.providerName === "string" && row.providerName
+				? row.providerName
+				: (typeof row.providerId === "string" ? row.providerId : "");
+			const model = typeof row.model === "string" ? row.model : "";
+			if (!provider) return model;
+			if (!model) return provider;
+			return provider + "/" + model;
+		}
+
+		/**
+		 * 子会话用过的模型个数。接口给 usedCount 时以其为准；
+		 * 只给 changedCount（换模型次数）时按「次数 + 1」（首次选中的那个也算一个）换算。
+		 */
+		function subagentUsedCount(row) {
+			if (!row) return 0;
+			if (typeof row.usedCount === "number" && row.usedCount >= 0) return row.usedCount;
+			const changed = Number(row.changedCount);
+			if (!(changed >= 0)) return 0;
+			return changed > 0 ? changed + 1 : 0;
+		}
+
+		/** 子智能体行文本：provider/model，换过模型且开关开启时追加「 · 用过 N 个」。 */
+		function subagentModelLabelText(row) {
+			const base = modelLabelText(row);
+			if (!base) return "";
+			const used = subagentUsedCount(row);
+			if (!mlSettings.changedModelBadge || used <= 1) return base;
+			return base + " · 用过 " + used + " 个";
+		}
+
+		/** 类名后缀判断（CSS Module 的哈希前缀不可靠，后缀稳定）。 */
+		function hasClassSuffix(el, suffix) {
+			const cls = el && el.className;
+			if (typeof cls !== "string" || !cls) return false;
+			const parts = cls.split(/\s+/);
+			for (let i = 0; i < parts.length; i++) if (parts[i].endsWith(suffix)) return true;
+			return false;
+		}
+
+		/** 子智能体行的「内容列」：treeitem > div.clickarea > span.content（含 label + summary）。 */
+		function subagentContentColumn(row) {
+			let clickarea = null;
+			const rowKids = row && row.children ? row.children : [];
+			for (let i = 0; i < rowKids.length; i++) {
+				if (rowKids[i].tagName === "DIV") { clickarea = rowKids[i]; break; }
+			}
+			const kids = Array.from((clickarea || row).children || []);
+			let col = kids.find((el) => hasClassSuffix(el, "_content")) || null;
+			if (!col) {
+				// 结构兜底：第一个非按钮、非指标区、且至少两个子元素的那一列
+				col = kids.find((el) => el.tagName !== "BUTTON" && !hasClassSuffix(el, "_metrics") && el.children.length >= 2) || null;
+			}
+			return col;
+		}
+
+		/** 行标题：内容列第一个子元素的文本（= 子会话 label），取不到时用 aria-label 首段。 */
+		function subagentRowTitle(item, col) {
+			const kids = Array.from((col && col.children) || []);
+			const first = kids.find((el) => !(el.getAttribute && el.getAttribute(ML_ATTR))) || null;
+			const text = first && typeof first.textContent === "string" ? first.textContent.trim() : "";
+			if (text) return text;
+			const aria = item.getAttribute("aria-label") || "";
+			return aria.split(" ")[0] || "";
+		}
+
+		/**
+		 * DOM 行 → 接口行。匹配强度依次为：
+		 *  1) 标题/sessionTitle 精确；
+		 *  2) 标题互相包含；
+		 *  3) 接口标题（常是会话标题 “工作目录 /root/...”）与整行文本互相包含；
+		 *  4) 只有一行时兜底。
+		 * 每行只用一次，避免同名行错配到同一份数据。
+		 */
+		function matchSubagentRow(title, rows, used, rowText) {
+			const norm = (v) => String(v == null ? "" : v).trim();
+			const target = norm(title);
+			const extra = norm(rowText);
+			if (!rows || rows.length === 0) return null;
+			const free = rows.filter((r) => r && !used.has(r));
+			if (free.length === 0) return null;
+			const fieldsOf = (r) => [norm(r.title), norm(r.sessionTitle)].filter(Boolean);
+			let hit = target ? free.find((r) => fieldsOf(r).some((f) => f === target)) || null : null;
+			if (!hit && target) {
+				hit = free.find((r) => fieldsOf(r).some((f) => f.includes(target) || target.includes(f))) || null;
+			}
+			if (!hit && extra) {
+				hit = free.find((r) => fieldsOf(r).some((f) => {
+					const probe = f.replace(/^工作目录s*/, "");
+					return probe.length >= 8 && (extra.includes(probe) || probe.includes(extra.slice(0, 24)));
+				})) || null;
+			}
+			if (!hit && free.length === 1 && rows.length === 1) hit = free[0];
+			if (hit) used.add(hit);
+			return hit;
+		}
+
+		/** 只读遍历：拼出「不含我们自己标签」的文本（不碰任何官方节点）。 */
+		function textWithoutOwnLabels(host) {
+			let out = "";
+			const walk = (node) => {
+				const kids = node.childNodes || [];
+				for (let i = 0; i < kids.length; i++) {
+					const child = kids[i];
+					if (child.nodeType === 1) {
+						if (child.getAttribute && child.getAttribute(ML_ATTR)) continue;
+						walk(child);
+					} else if (child.nodeType === 3) {
+						out += child.nodeValue || "";
+					}
+				}
+			};
+			walk(host);
+			return out;
+		}
+
+		/** 官方已渲染同类模型文本（xxx/yyy）时让位：不插入我们的标签。 */
+		function hasOfficialModelText(host) {
+			const text = textWithoutOwnLabels(host);
+			return /(^|[\s·|])[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+($|[\s·|])/.test(text);
+		}
+
+		/** 创建一个标签节点；消息行（助手/用户）左侧带分隔竖线。 */
+		function createModelLabelNode(doc, kind) {
+			const node = doc.createElement("span");
+			node.setAttribute(ML_ATTR, kind);
+			const style = [
+				"display:inline-flex", "align-items:center", "flex:none", "gap:4px",
+				"font-size:10px", "line-height:15px", "font-weight:400",
+				"color:var(--dsw-alias-label-tertiary)",
+				"white-space:nowrap", "font-variant-numeric:tabular-nums", "pointer-events:none"
+			];
+			if (kind !== "subagent") {
+				style.push("margin-left:8px", "padding-left:8px", "border-left:0.5px solid var(--dsw-alias-border-l2)");
+			}
+			node.style.cssText = style.join(";");
+			const text = doc.createElement("span");
+			text.setAttribute(ML_TEXT_ATTR, kind);
+			node.appendChild(text);
+			return node;
+		}
+
+		/** 取 host 直接子级里属于我们的标签（按 kind 过滤）。 */
+		function ownModelLabels(host, kind) {
+			const out = [];
+			const kids = host && host.children ? host.children : [];
+			for (let i = 0; i < kids.length; i++) {
+				const el = kids[i];
+				if (!el || !el.getAttribute) continue;
+				const marked = el.getAttribute(ML_ATTR);
+				if (!marked) continue;
+				if (kind == null || marked === kind) out.push(el);
+			}
+			return out;
+		}
+
+		/** 拿到（必要时创建）host 下唯一的标签节点；顺手清掉重复节点。 */
+		function ensureModelLabel(doc, host, kind) {
+			const existing = ownModelLabels(host, kind);
+			for (let i = 1; i < existing.length; i++) {
+				if (existing[i].parentNode) existing[i].parentNode.removeChild(existing[i]);
+			}
+			if (existing.length > 0) return existing[0];
+			const node = createModelLabelNode(doc, kind);
+			host.appendChild(node);
+			return node;
+		}
+
+		/** 子智能体标签挂在「摘要行之后」，且不进指标区。 */
+		function placeSubagentLabel(col, node) {
+			const kids = Array.from(col.children || []);
+			let anchor = null;
+			for (let i = 0; i < kids.length; i++) {
+				const el = kids[i];
+				if (el === node) continue;
+				if (el.getAttribute && el.getAttribute(ML_ATTR)) continue;
+				if (hasClassSuffix(el, "_metrics")) break;
+				anchor = el;
+			}
+			if (!anchor) {
+				if (node.parentNode !== col) col.appendChild(node);
+				return;
+			}
+			if (anchor.nextSibling !== node) col.insertBefore(node, anchor.nextSibling);
+		}
+
+		/** 只在文字真的变了才写 DOM（避免无意义的重排/重绘）。 */
+		function setModelLabelText(node, text) {
+			const target = node.querySelector("[" + ML_TEXT_ATTR + "]") || node;
+			if (target.textContent !== text) target.textContent = text;
+		}
+
+		/** 外部（mode=external）标记：灰色「外部」小字。 */
+		function setModelLabelExternal(doc, node, external) {
+			const kids = Array.from(node.children || []);
+			let mark = kids.find((el) => el.getAttribute && el.getAttribute(ML_EXTERNAL_ATTR) != null) || null;
+			if (!external) {
+				if (mark && mark.parentNode) mark.parentNode.removeChild(mark);
+				return;
+			}
+			if (!mark) {
+				mark = doc.createElement("span");
+				mark.setAttribute(ML_EXTERNAL_ATTR, "");
+				mark.style.cssText = "color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));opacity:.7";
+				node.appendChild(mark);
+			}
+			if (mark.textContent !== "外部") mark.textContent = "外部";
+		}
+
+		/** 容器可用宽度（量不到就当未知，未知时不隐藏）。 */
+		function modelLabelHostWidth(host) {
+			if (!host || typeof host.getBoundingClientRect !== "function") return null;
+			try {
+				const rect = host.getBoundingClientRect();
+				const w = rect && rect.width > 0 ? rect.width : (host.clientWidth || 0);
+				return w > 0 ? w : null;
+			} catch (e) { return null; }
+		}
+
+		/** 容器太窄就隐藏我们的标签；官方元素永远优先（只改自己节点的 display）。 */
+		function applyModelLabelWidthGate(node, host, minWidth) {
+			const w = modelLabelHostWidth(host);
+			const display = w !== null && w < minWidth ? "none" : "inline-flex";
+			if (node.style.display !== display) node.style.display = display;
+		}
+
+		/** 移除 host 下我们的标签（让位/数据消失时用）。 */
+		function dropModelLabelIn(host, kind) {
+			const mine = ownModelLabels(host, kind);
+			for (let i = 0; i < mine.length; i++) {
+				if (mine[i].parentNode) mine[i].parentNode.removeChild(mine[i]);
+			}
+		}
+
+		/** 移除本轮没触达的标签：开关关闭、行消失、让位都由这一句兜住。 */
+		function dropStaleModelLabels(doc, keep) {
+			const all = doc.querySelectorAll("[" + ML_ATTR + "]");
+			for (let i = 0; i < all.length; i++) {
+				const node = all[i];
+				if (!keep.has(node) && node.parentNode) node.parentNode.removeChild(node);
+			}
+		}
+
+		/** 轮号：优先 data-turn-tail（助手轮尾），其次最近的 data-chat-turn（用户消息行）。 */
+		function modelLabelTurnNumber(rowEl) {
+			const tail = rowEl.closest("[data-turn-tail]");
+			if (tail) {
+				const n = Number(tail.getAttribute("data-turn-tail"));
+				if (Number.isFinite(n)) return n;
+			}
+			const chat = rowEl.closest("[data-chat-turn]");
+			if (chat) {
+				const n = Number(chat.getAttribute("data-chat-turn"));
+				if (Number.isFinite(n)) return n;
+			}
+			return null;
+		}
+
+		/** 轮号 → 接口行：精确命中优先，命中失败时才退一位（接口 0 基/1 基差异兜底）。 */
+		function pickTurnModel(list, turnNum) {
+			if (!list || turnNum === null) return null;
+			const pick = (n) => list.find((t) => t && Number(t.index) === n) || null;
+			return pick(turnNum) || pick(turnNum - 1) || pick(turnNum + 1) || null;
+		}
+
+		/** 上一轮的模型（按 index 大小，不依赖 0 基/1 基）。 */
+		function previousTurnModel(list, current) {
+			if (!list || !current) return null;
+			const cn = Number(current.index);
+			if (!Number.isFinite(cn)) return null;
+			let best = null;
+			for (let i = 0; i < list.length; i++) {
+				const t = list[i];
+				if (!t) continue;
+				const n = Number(t.index);
+				if (!Number.isFinite(n) || n >= cn) continue;
+				if (!best || n > Number(best.index)) best = t;
+			}
+			return best;
+		}
+
+		/** 模型同一性：providerId + model。 */
+		function modelKeyOf(row) {
+			const provider = row && (row.providerId || row.providerName || "");
+			const model = row && row.model ? row.model : "";
+			return String(provider) + "/" + String(model);
+		}
+
+		/**
+		 * change-only：与上一轮同模型则不显示（第一轮算变化）；
+		 * always：每轮都显示。
+		 */
+		function shouldShowTurnModel(list, turnNum) {
+			if (mlSettings.messageModelLabelMode === "always") return true;
+			const current = pickTurnModel(list, turnNum);
+			if (!current) return false;
+			const prev = previousTurnModel(list, current);
+			if (!prev) return true;
+			return modelKeyOf(prev) !== modelKeyOf(current);
+		}
+
+		/** 单个接口的静默取数器：失败只记一次日志，并按退避窗口跳过后续请求。 */
+		function createModelLabelEndpoint(path) {
+			const state = { failedAt: 0, warned: false, inflight: null };
+			return function read(sessionId, fetchImpl) {
+				if (!sessionId || typeof fetchImpl !== "function") return Promise.resolve(null);
+				const now = Date.now();
+				if (state.failedAt && now - state.failedAt < ML_FAIL_BACKOFF_MS) return Promise.resolve(null);
+				if (state.inflight) return state.inflight;
+				const url = ML_API_BASE + path + "?sessionId=" + encodeURIComponent(sessionId);
+				const task = Promise.resolve()
+					.then(() => fetchImpl(url, { method: "GET", credentials: "same-origin", headers: { accept: "application/json" } }))
+					.then((resp) => {
+						if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
+						return resp.json();
+					})
+					.then((body) => { state.failedAt = 0; return body && typeof body === "object" ? body : null; })
+					.catch(() => {
+						state.failedAt = Date.now();
+						if (!state.warned) {
+							state.warned = true;
+							console.info("[model-label] " + path + " 不可用，模型标签静默降级");
+						}
+						return null;
+					})
+					.finally(() => { state.inflight = null; });
+				state.inflight = task;
+				return task;
+			};
+		}
+		const readSubagentsEndpoint = createModelLabelEndpoint("/subagents");
+		const readTurnsEndpoint = createModelLabelEndpoint("/turns");
+
+		/**
+		 * 安装三处模型标签（纯追加 DOM）。
+		 * @param options { document, sessions, rpc, fetch, getSessionId, readSettings, settings }
+		 * @returns { refresh, render, dispose, setSettings, getSettings } 或 null
+		 */
+		function installModelLabels(options) {
+			const opts = options || {};
+			const doc = opts.document || (typeof document !== "undefined" ? document : null);
+			if (!doc || !doc.body) return null;
+			const win = doc.defaultView || (typeof window !== "undefined" ? window : null);
+			if (mlInstalled) {
+				try { mlInstalled.dispose(); } catch (e) { /* 旧实例自清失败忽略 */ }
+			}
+			const fetchImpl = typeof opts.fetch === "function"
+				? opts.fetch
+				: (win && typeof win.fetch === "function" ? win.fetch.bind(win) : null);
+			const getSessionId = typeof opts.getSessionId === "function"
+				? opts.getSessionId
+				: modelLabelSessionId(opts.sessions);
+			const timers = win && typeof win.setTimeout === "function" ? win : { setTimeout, clearTimeout, setInterval, clearInterval };
+			mergeModelLabelSettings(opts.settings);
+			let disposed = false;
+			let debounceTimer = null;
+			let tickTimer = null;
+			let ticks = 0;
+			let subagentRows = null;
+			let turns = null;
+			let observer = null;
+			let settingsBusy = false;
+			let lastFetchAt = 0;
+			let lastSessionId = null;
+
+			const query = (sel) => { try { return doc.querySelectorAll(sel); } catch (e) { return []; } };
+
+			/** 子智能体浮层行：内容列里追加 provider/model。 */
+			const renderSubagents = (keep) => {
+				const trees = query(ML_SELECTOR.tree);
+				if (trees.length === 0) return;
+				if (!subagentRows || subagentRows.length === 0) return;
+				const used = new Set();
+				// 按树逐个取行：拼接多个选择器时逗号会切断作用域，必须分开查。
+				const items = [];
+				trees.forEach((tree) => {
+					const rowsInTree = tree.querySelectorAll(ML_SELECTOR.treeRow);
+					rowsInTree.forEach((item) => items.push(item));
+				});
+				items.forEach((item) => {
+					const col = subagentContentColumn(item);
+					if (!col) return;
+					const data = matchSubagentRow(subagentRowTitle(item, col), subagentRows, used, col.textContent || "");
+					if (!data) return;
+					// 让位：内容列里官方已经渲染了同类模型文本 → 不插入
+					if (hasOfficialModelText(col)) { dropModelLabelIn(col, "subagent"); return; }
+					const external = data.mode === "external" || item.getAttribute("aria-disabled") === "true";
+					const text = subagentModelLabelText(data);
+					if (!text && !external) { dropModelLabelIn(col, "subagent"); return; }
+					const node = ensureModelLabel(doc, col, "subagent");
+					placeSubagentLabel(col, node);
+					setModelLabelText(node, text);
+					setModelLabelExternal(doc, node, external);
+					applyModelLabelWidthGate(node, col, ML_MIN_WIDTH_SUBAGENT);
+					keep.add(node);
+				});
+			};
+
+			/** 助手轮尾 / 用户消息行：动作行末尾追加（带左分隔竖线）。 */
+			const renderTurnRows = (keep) => {
+				if (!turns || turns.length === 0) return;
+				const rows = query(ML_SELECTOR.assistantRow + ", " + ML_SELECTOR.userRow);
+				rows.forEach((rowEl) => {
+					const kind = rowEl.getAttribute("data-clock") === "start" ? "user" : "assistant";
+					const turnNum = modelLabelTurnNumber(rowEl);
+					if (turnNum === null) return;
+					const pick = pickTurnModel(turns, turnNum);
+					if (!pick) { dropModelLabelIn(rowEl, kind); return; }
+					const text = modelLabelText(pick);
+					if (!text) { dropModelLabelIn(rowEl, kind); return; }
+					if (!shouldShowTurnModel(turns, turnNum)) { dropModelLabelIn(rowEl, kind); return; }
+					// 让位：该行官方已有同类文本
+					if (hasOfficialModelText(rowEl)) { dropModelLabelIn(rowEl, kind); return; }
+					const node = ensureModelLabel(doc, rowEl, kind);
+					setModelLabelText(node, text);
+					// 用户消息那一行本身就很窄（只有时间 + 复制），用更小的阈值，否则永远不会显示。
+					applyModelLabelWidthGate(node, rowEl, kind === "user" ? ML_MIN_WIDTH_USER : ML_MIN_WIDTH_MESSAGE);
+					keep.add(node);
+				});
+			};
+
+			const render = () => {
+				if (disposed) return;
+				const keep = new Set();
+				try {
+					if (mlSettings.subagentModelLabel) renderSubagents(keep);
+					if (mlSettings.messageModelLabel) renderTurnRows(keep);
+				} catch (e) {
+					console.warn("[model-label] 渲染失败", e);
+				} finally {
+					dropStaleModelLabels(doc, keep);
+				}
+			};
+
+			/**
+			 * 取数。关键点：**只有明确成功且带数据时才覆盖缓存**。
+			 * 老实现一遇到「会话 id 短暂为空 / 接口失败 / 浮层暂时关掉」就把缓存清成 null，
+			 * 下一次 render 立刻把已显示的标签全删掉，再等下一轮重新加回来 —— 这就是
+			 * 用户看到的「一瞬间消失又出现」。现在改成：失败/暂时不需要时保留上一次好数据。
+			 */
+			const loadData = async (force) => {
+				const sessionId = getSessionId();
+				const wantSubagents = mlSettings.subagentModelLabel && query(ML_SELECTOR.tree).length > 0;
+				const wantTurns = mlSettings.messageModelLabel
+					&& query(ML_SELECTOR.assistantRow + ", " + ML_SELECTOR.userRow).length > 0;
+				// 会话 id 一瞬取不到（切会话、DOM 重建）：保留旧数据，直接不动。
+				if (typeof sessionId !== "string" || !sessionId) return;
+				// 真正换会话才丢缓存（旧会话的模型不能带到新会话上）。
+				const sessionChanged = sessionId !== lastSessionId;
+				if (sessionChanged) {
+					lastSessionId = sessionId;
+					lastFetchAt = 0;
+					subagentRows = null;
+					turns = null;
+				}
+				// 节流：复用上一轮数据，只重渲染。
+				if (!force && !sessionChanged && Date.now() - lastFetchAt < ML_FETCH_MIN_MS) return;
+				lastFetchAt = Date.now();
+				const jobs = [];
+				// 浮层没开就先不取，但也**不清空**已有缓存（重新打开时立即用缓存渲染，不闪）。
+				jobs.push(wantSubagents
+					? readSubagentsEndpoint(sessionId, fetchImpl).then((body) => {
+						if (body && Array.isArray(body.rows)) subagentRows = body.rows;
+					})
+					: Promise.resolve());
+				jobs.push(wantTurns
+					? readTurnsEndpoint(sessionId, fetchImpl).then((body) => {
+						if (body && Array.isArray(body.turns)) turns = body.turns;
+					})
+					: Promise.resolve());
+				await Promise.all(jobs);
+			};
+
+			const pass = async (force) => {
+				if (disposed) return;
+				try {
+					await loadData(force === true);
+					render();
+				} catch (e) {
+					console.warn("[model-label] 刷新失败", e);
+				}
+			};
+
+			const schedule = () => {
+				if (disposed || debounceTimer !== null) return;
+				debounceTimer = timers.setTimeout(() => {
+					debounceTimer = null;
+					pass();
+				}, ML_DEBOUNCE_MS);
+			};
+
+			/** 我们自己节点的改动（含文本更新）不触发下一轮，避免自激循环。 */
+			const isOwnNode = (node) => {
+				let n = node;
+				if (!n) return false;
+				if (n.nodeType === 3) n = n.parentNode;
+				if (!n || n.nodeType !== 1 || typeof n.closest !== "function") return false;
+				try { return !!n.closest("[" + ML_ATTR + "]"); } catch (e) { return false; }
+			};
+			const isOwnMutation = (record) => {
+				if (!record) return false;
+				if (isOwnNode(record.target)) return true;
+				if (record.type !== "childList") return false;
+				const nodes = [];
+				const added = record.addedNodes || [];
+				const removed = record.removedNodes || [];
+				for (let i = 0; i < added.length; i++) nodes.push(added[i]);
+				for (let i = 0; i < removed.length; i++) nodes.push(removed[i]);
+				if (nodes.length === 0) return false;
+				for (let i = 0; i < nodes.length; i++) if (!isOwnNode(nodes[i])) return false;
+				return true;
+			};
+			const onMutations = (records) => {
+				if (disposed) return;
+				for (let i = 0; i < records.length; i++) {
+					if (!isOwnMutation(records[i])) { schedule(); return; }
+				}
+			};
+
+			const readSettingsOnce = () => {
+				if (typeof opts.readSettings === "function") {
+					return Promise.resolve()
+						.then(() => opts.readSettings())
+						.then((s) => { mergeModelLabelSettings(s); })
+						.catch(() => {});
+				}
+				if (settingsBusy || !opts.rpc) return Promise.resolve();
+				settingsBusy = true;
+				return readModelLabelSettings(opts.rpc)
+					.then((s) => { mergeModelLabelSettings(s); })
+					.finally(() => { settingsBusy = false; });
+			};
+
+			const onResize = () => schedule();
+			const tick = () => {
+				if (disposed) return;
+				ticks += 1;
+				const active = query(ML_SELECTOR.tree + ", " + ML_SELECTOR.assistantRow + ", " + ML_SELECTOR.userRow).length > 0;
+				if (!active) return;
+				if (ticks % ML_SETTINGS_EVERY_TICKS === 0) readSettingsOnce().then(pass).catch(() => {});
+				else pass();
+			};
+
+			const handle = {
+				refresh: () => pass(true),
+				render,
+				setSettings: (next) => { mergeModelLabelSettings(next); render(); },
+				getSettings: () => Object.assign({}, mlSettings)
+			};
+			handle.dispose = () => {
+				if (disposed) return;
+				disposed = true;
+				try { if (observer) observer.disconnect(); } catch (e) { /* ignore */ }
+				observer = null;
+				if (debounceTimer !== null) { timers.clearTimeout(debounceTimer); debounceTimer = null; }
+				if (tickTimer !== null) { timers.clearInterval(tickTimer); tickTimer = null; }
+				try { if (win && typeof win.removeEventListener === "function") win.removeEventListener("resize", onResize); } catch (e) { /* ignore */ }
+				subagentRows = null;
+				turns = null;
+				dropStaleModelLabels(doc, new Set());
+				if (mlInstalled === handle) mlInstalled = null;
+			};
+
+			mlInstalled = handle;
+			// 首轮：先读开关（取不到按默认），再取数渲染。
+			readSettingsOnce().then(pass).catch(() => { pass(); });
+			try {
+				if (win && typeof win.MutationObserver === "function") {
+					observer = new win.MutationObserver(onMutations);
+					observer.observe(doc.body, { childList: true, subtree: true, characterData: true });
+				}
+			} catch (e) {
+				console.warn("[model-label] MutationObserver 不可用，退回 3 秒轮询", e);
+			}
+			tickTimer = timers.setInterval(tick, ML_TICK_MS);
+			try { if (win && typeof win.addEventListener === "function") win.addEventListener("resize", onResize); } catch (e) { /* ignore */ }
+			return handle;
+		}
+		//#endregion
+
 		//#endregion
 
 		const inject = ["sessions", "connection", "slots"];
+		exports.installModelLabels = installModelLabels;
 		// ----「模型工具箱」极简入口 ----
 		// 设置面板只保留这一个分区：功能全部迁到独立整页（dsh-model-toolkit/，另开标签页）。
 		// 样式一律用 DSH 主题令牌字面量（var(--dsw-alias-*)，对应原「次要按钮」观感）。
@@ -1219,6 +1919,11 @@ window.__ModuleLoader__.load({
 				const switchFlags = loadSettings(quotaShared.rpc).then((s) => ({
 					badgeAndQuota: !s || s.badgeAndQuota !== false
 				}));
+				// 模型标签三处挂载（子智能体浮层行 / 助手轮尾 / 用户消息行）：
+				// 纯追加 DOM，不注册、不遮蔽任何官方槽位；失败只记日志，不影响徽章。
+				try {
+					installModelLabels({ sessions, rpc: quotaShared.rpc });
+				} catch (e) { console.warn("[model-label] 安装失败", e); }
 				// 数据路径选择：
 				//  - 旧版 DSH（connection 服务还带 api 字段，如 0.1.1-rc.x）→ 原逻辑直用 connection.api。
 				//  - 新版 DSH（0.1.2+，connection.api 已移除）→ 等 modelDirectories / remote 服务
@@ -1300,6 +2005,7 @@ window.__ModuleLoader__.load({
 		const m2 = __toolkitModule2(require);
 
 		const inject = ["slots", "connection", "sessions"];
+		exports.installModelLabels = m2.installModelLabels;
 		function apply(ctx) {
 			m2.apply(ctx);
 		}
