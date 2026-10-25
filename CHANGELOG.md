@@ -6,6 +6,21 @@
 
 发布时在版本号后补上日期（`## [x.y.z] - YYYY-MM-DD`）。
 
+## [0.5.2] - 2026-10-25
+
+**消息模型开关拆分**：删掉「显示时机」下拉，改为「用户问题」「模型回答」两个独立开关；开关打开即每轮显示。
+
+### Changed
+
+- 设置项收敛为 4 项：`subagentModelLabel`、`changedModelBadge`、`messageQuestionModelLabel`、`messageAnswerModelLabel`。
+- 移除 `messageModelLabelMode`（change-only / always）与 `messageModelLabel` 总开关。
+- 用户消息行与助手轮尾各自独立控制，可以只显示其中一处；不再判断「模型是否变化」。
+
+### Migration
+
+- 首次读取时自动迁移：旧 `messageModelLabel: false` → 两个新开关都关；其余情况都开。
+- 迁移后写回配置文件并删除旧键（`messageModelLabel`、`messageModelLabelMode`），无需手动编辑。
+
 ## [0.5.1] - 2026-10-25
 
 **模型名蓝色高亮 + 打开即显示**：三处模型标识统一改成蓝色；数据改为「进会话就预取 + 本地缓存」，打开浮层或刷新页面不再等接口。

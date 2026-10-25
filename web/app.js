@@ -201,15 +201,12 @@
 			/* 模型标识：子代理行尾 / 消息轮尾的模型标签 */
 			'pref.subagentModelLabel': '子代理模型标识',
 			'pref.subagentModelLabel.desc': '在子代理条目后面显示它用的线路与模型（外部执行没有本地会话，不显示）。',
-			'pref.messageModelLabel': '消息模型标识',
-			'pref.messageModelLabel.desc': '在每轮答复末尾显示这一轮实际使用的模型。',
-			'pref.messageModelLabelMode': '显示时机',
-			'pref.messageModelLabelMode.desc': '只在模型变化时显示，还是每轮都显示。',
-			'pref.messageModelLabelMode.change-only': '仅模型变化时',
-			'pref.messageModelLabelMode.always': '每轮都显示',
 			'pref.changedModelBadge': '变化徽标',
 			'pref.changedModelBadge.desc': '子代理用过不止一个模型时，在标识后补一句「用过 N 个」。',
-			'pref.modelLabel.off': '先打开「消息模型标识」才能改这一项',
+			'pref.messageQuestionModelLabel': '用户问题显示模型',
+			'pref.messageQuestionModelLabel.desc': '在用户消息那一行显示本轮问题所用的模型。',
+			'pref.messageAnswerModelLabel': '模型回答显示模型',
+			'pref.messageAnswerModelLabel.desc': '在助手回复的轮尾显示这一轮实际使用的模型。',
 			'pref.modelLabel.off.subagent': '先打开「子代理模型标识」才能改这一项',
 			'pref.minUnit': '分钟',
 			'pref.fontSize.small': '小',
@@ -403,15 +400,12 @@
 			'pref.language.desc': 'The plugin own UI language; independent from the page language switch above.',
 			'pref.subagentModelLabel': 'Subagent model label',
 			'pref.subagentModelLabel.desc': 'Show the line and model used by each subagent entry (external runs have no local session and are left unlabeled).',
-			'pref.messageModelLabel': 'Message model label',
-			'pref.messageModelLabel.desc': 'Show the model actually used at the end of every turn.',
-			'pref.messageModelLabelMode': 'When to show',
-			'pref.messageModelLabelMode.desc': 'Only when the model changes, or on every turn.',
-			'pref.messageModelLabelMode.change-only': 'Only when it changes',
-			'pref.messageModelLabelMode.always': 'Every turn',
 			'pref.changedModelBadge': 'Changed-model badge',
 			'pref.changedModelBadge.desc': 'When a subagent has used more than one model, append "used N models" after the label.',
-			'pref.modelLabel.off': 'Turn on “Message model label” first to edit this item',
+			'pref.messageQuestionModelLabel': 'Show model on user messages',
+			'pref.messageQuestionModelLabel.desc': 'Show the model used for the question on the user message row.',
+			'pref.messageAnswerModelLabel': 'Show model on replies',
+			'pref.messageAnswerModelLabel.desc': 'Show the model actually used at the end of every assistant reply.',
 			'pref.modelLabel.off.subagent': 'Turn on “Subagent model label” first to edit this item',
 			'pref.minUnit': 'minutes',
 			'pref.fontSize.small': 'Small',
@@ -506,9 +500,9 @@
 			fontSize: 'middle',
 			language: 'system',
 			subagentModelLabel: true,
-			messageModelLabel: true,
-			messageModelLabelMode: 'change-only',
-			changedModelBadge: true
+			changedModelBadge: true,
+			messageQuestionModelLabel: true,
+			messageAnswerModelLabel: true
 		}
 	}
 
@@ -2097,8 +2091,8 @@
 	 * 不再出现在列表里（8 项变 7 项），也不再进保存增量。
 	 * 形态：用户反馈「设置没必要用表格」→ 改成表单式列表，分组用区块小标题。
 	 * 分组语义（features / ui / model）与顺序不变；控件类型、脏标记、保存增量逻辑全部不变。
-	 * model 组（子代理 / 消息轮尾的模型标识）是新增的 4 项，单独一组放在最后，
-	 * 其中「显示时机」与「变化徽标」受上级开关 messageModelLabel 联动置灰。 */
+	 * model 组（子代理 / 用户问题 / 助手回复的模型标识）是 4 项，单独一组放在最后，
+	 * 其中「变化徽标」受上级开关 subagentModelLabel 联动置灰。 */
 	var REMOVED_PREF_KEYS = { capabilityEditor: true }
 
 	function prefRows() {
@@ -2110,11 +2104,11 @@
 			{ key: 'showMore', group: 'ui', kind: 'bool' },
 			{ key: 'fontSize', group: 'ui', kind: 'select', options: ['small', 'middle', 'large'], labelKey: 'pref.fontSize.' },
 			{ key: 'language', group: 'ui', kind: 'select', options: ['system', 'zh', 'en'], labelKey: 'pref.lang.' },
-			/* 模型标识：子代理行尾 / 消息轮尾（后两项受 messageModelLabel 联动置灰） */
+			/* 模型标识：子代理行尾 / 变化徽标 / 用户问题行 / 助手回复轮尾（徽标受子代理开关联动置灰） */
 			{ key: 'subagentModelLabel', group: 'model', kind: 'bool' },
-			{ key: 'messageModelLabel', group: 'model', kind: 'bool' },
-			{ key: 'messageModelLabelMode', group: 'model', kind: 'select', options: ['change-only', 'always'], labelKey: 'pref.messageModelLabelMode.' },
-			{ key: 'changedModelBadge', group: 'model', kind: 'bool' }
+			{ key: 'changedModelBadge', group: 'model', kind: 'bool' },
+			{ key: 'messageQuestionModelLabel', group: 'model', kind: 'bool' },
+			{ key: 'messageAnswerModelLabel', group: 'model', kind: 'bool' }
 		]
 	}
 
@@ -2193,8 +2187,7 @@
 	 */
 	function prefOffReason(key) {
 		if (key === 'autoRefreshMin' && prefs().autoRefreshOn !== true) return t('pref.autoRefreshMin.off')
-		/* 模型标识：显示时机属于「消息模型标识」，换模型徽标属于「子代理模型标识」，各自跟上级联动 */
-		if (key === 'messageModelLabelMode' && prefs().messageModelLabel !== true) return t('pref.modelLabel.off')
+		/* 模型标识：换模型徽标属于「子代理模型标识」，跟上级联动 */
 		if (key === 'changedModelBadge' && prefs().subagentModelLabel !== true) return t('pref.modelLabel.off.subagent')
 		return ''
 	}
@@ -2270,7 +2263,7 @@
 			return h('option', { value: o, text: t(item.labelKey + o) })
 		}))
 		sel.value = sv
-		/* 「显示时机」在「消息模型标识」关闭时同样禁用（与 autoRefreshMin 同一套置灰口径） */
+		/* 下拉同样支持联动置灰（与 autoRefreshMin 同一套口径） */
 		if (offReason) {
 			sel.disabled = true
 			sel.setAttribute('disabled', 'disabled')

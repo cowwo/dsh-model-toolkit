@@ -1122,19 +1122,28 @@ window.__ModuleLoader__.load({
 			assistantRow: 'div[data-clock="end"]',
 			userRow: 'div[data-clock="start"]'
 		};
-		const ML_DEFAULTS = { subagentModelLabel: true, messageModelLabel: true, messageModelLabelMode: "change-only", changedModelBadge: true };
-		/** 设置镜像；缺字段按默认 true / true / change-only / true。 */
+		const ML_DEFAULTS = { subagentModelLabel: true, changedModelBadge: true, messageQuestionModelLabel: true, messageAnswerModelLabel: true };
+		/** 设置镜像；缺字段按默认全开（四个开关）。 */
 		const mlSettings = Object.assign({}, ML_DEFAULTS);
 		/** 当前已安装实例：重复安装先拆旧实例，全局只保留一份。 */
 		let mlInstalled = null;
 
-		/** 用 host 返回的设置覆盖镜像（只认四个键；缺字段保持默认）。 */
+		/**
+		 * 用 host 返回的设置覆盖镜像（只认四个键；缺字段保持默认）。
+		 * 老 host 只给 messageModelLabel（总开关）：新键缺失时按它推导（显式 false → 两个都关），
+		 * 与 lib/index.js 的 clampSettings 同一口径。
+		 */
 		function mergeModelLabelSettings(input) {
 			if (!input || typeof input !== "object") return mlSettings;
 			if (typeof input.subagentModelLabel === "boolean") mlSettings.subagentModelLabel = input.subagentModelLabel;
-			if (typeof input.messageModelLabel === "boolean") mlSettings.messageModelLabel = input.messageModelLabel;
-			if (input.messageModelLabelMode === "change-only" || input.messageModelLabelMode === "always") mlSettings.messageModelLabelMode = input.messageModelLabelMode;
 			if (typeof input.changedModelBadge === "boolean") mlSettings.changedModelBadge = input.changedModelBadge;
+			const legacy = typeof input.messageModelLabel === "boolean" ? input.messageModelLabel !== false : null;
+			mlSettings.messageQuestionModelLabel = typeof input.messageQuestionModelLabel === "boolean"
+				? input.messageQuestionModelLabel
+				: (legacy === null ? mlSettings.messageQuestionModelLabel : legacy);
+			mlSettings.messageAnswerModelLabel = typeof input.messageAnswerModelLabel === "boolean"
+				? input.messageAnswerModelLabel
+				: (legacy === null ? mlSettings.messageAnswerModelLabel : legacy);
 			return mlSettings;
 		}
 
@@ -1145,9 +1154,10 @@ window.__ModuleLoader__.load({
 			if (value && value.settings && typeof value.settings === "object") return value.settings;
 			const flat = value || resp;
 			if (typeof flat.subagentModelLabel === "boolean"
-				|| typeof flat.messageModelLabel === "boolean"
-				|| typeof flat.messageModelLabelMode === "string"
-				|| typeof flat.changedModelBadge === "boolean") return flat;
+				|| typeof flat.changedModelBadge === "boolean"
+				|| typeof flat.messageQuestionModelLabel === "boolean"
+				|| typeof flat.messageAnswerModelLabel === "boolean"
+				|| typeof flat.messageModelLabel === "boolean") return flat;
 			return null;
 		}
 
@@ -1155,7 +1165,7 @@ window.__ModuleLoader__.load({
 		 * 读开关。两条路，任一成功即可：
 		 *  1) 老路：providerBadge/settings RPC（部分宿主/版本没有这个 RPC）；
 		 *  2) 新路：直接 GET /dsh-model-toolkit/api/state 里的 prefs（同一份设置文件）。
-		 * 都失败就返回 null，调用方按默认（全开 + change-only）处理，绝不报错刷屏。
+		 * 都失败就返回 null，调用方按默认（四个开关全开）处理，绝不报错刷屏。
 		 */
 		function readModelLabelSettings(rpc) {
 			const viaRpc = (() => {
@@ -1576,42 +1586,6 @@ window.__ModuleLoader__.load({
 			return pick(turnNum) || pick(turnNum - 1) || pick(turnNum + 1) || null;
 		}
 
-		/** 上一轮的模型（按 index 大小，不依赖 0 基/1 基）。 */
-		function previousTurnModel(list, current) {
-			if (!list || !current) return null;
-			const cn = Number(current.index);
-			if (!Number.isFinite(cn)) return null;
-			let best = null;
-			for (let i = 0; i < list.length; i++) {
-				const t = list[i];
-				if (!t) continue;
-				const n = Number(t.index);
-				if (!Number.isFinite(n) || n >= cn) continue;
-				if (!best || n > Number(best.index)) best = t;
-			}
-			return best;
-		}
-
-		/** 模型同一性：providerId + model。 */
-		function modelKeyOf(row) {
-			const provider = row && (row.providerId || row.providerName || "");
-			const model = row && row.model ? row.model : "";
-			return String(provider) + "/" + String(model);
-		}
-
-		/**
-		 * change-only：与上一轮同模型则不显示（第一轮算变化）；
-		 * always：每轮都显示。
-		 */
-		function shouldShowTurnModel(list, turnNum) {
-			if (mlSettings.messageModelLabelMode === "always") return true;
-			const current = pickTurnModel(list, turnNum);
-			if (!current) return false;
-			const prev = previousTurnModel(list, current);
-			if (!prev) return true;
-			return modelKeyOf(prev) !== modelKeyOf(current);
-		}
-
 		/** 单个接口的静默取数器：失败只记一次日志，并按退避窗口跳过后续请求。 */
 		function createModelLabelEndpoint(path) {
 			const state = { failedAt: 0, warned: false, inflight: null };
@@ -1716,13 +1690,15 @@ window.__ModuleLoader__.load({
 				const rows = query(ML_SELECTOR.assistantRow + ", " + ML_SELECTOR.userRow);
 				rows.forEach((rowEl) => {
 					const kind = rowEl.getAttribute("data-clock") === "start" ? "user" : "assistant";
+					// 用户行与助手行各有一个独立开关：关掉的那一侧直接清掉我们的节点。
+					const enabled = kind === "user" ? mlSettings.messageQuestionModelLabel : mlSettings.messageAnswerModelLabel;
+					if (!enabled) { dropModelLabelIn(rowEl, kind); return; }
 					const turnNum = modelLabelTurnNumber(rowEl);
 					if (turnNum === null) return;
 					const pick = pickTurnModel(turns, turnNum);
 					if (!pick) { dropModelLabelIn(rowEl, kind); return; }
 					const text = modelLabelText(pick);
 					if (!text) { dropModelLabelIn(rowEl, kind); return; }
-					if (!shouldShowTurnModel(turns, turnNum)) { dropModelLabelIn(rowEl, kind); return; }
 					// 让位：该行官方已有同类文本
 					if (hasOfficialModelText(rowEl)) { dropModelLabelIn(rowEl, kind); return; }
 					const node = ensureModelLabel(doc, rowEl, kind);
@@ -1739,7 +1715,7 @@ window.__ModuleLoader__.load({
 				const keep = new Set();
 				try {
 					if (mlSettings.subagentModelLabel) renderSubagents(keep);
-					if (mlSettings.messageModelLabel) renderTurnRows(keep);
+					if (mlSettings.messageQuestionModelLabel || mlSettings.messageAnswerModelLabel) renderTurnRows(keep);
 				} catch (e) {
 					console.warn("[model-label] 渲染失败", e);
 				} finally {
@@ -1757,7 +1733,7 @@ window.__ModuleLoader__.load({
 				const sessionId = getSessionId();
 				// 不再依赖“浮层是否打开”：页面一加载就把数据备好，打开浮层直接用现成的。
 				const wantSubagents = mlSettings.subagentModelLabel;
-				const wantTurns = mlSettings.messageModelLabel;
+				const wantTurns = mlSettings.messageQuestionModelLabel || mlSettings.messageAnswerModelLabel;
 				// 会话 id 一瞬取不到（切会话、DOM 重建）：保留旧数据，直接不动。
 				if (typeof sessionId !== "string" || !sessionId) return;
 				// 换会话时先把缓存灌进来（旧会话的模型不能带到新会话上）。
